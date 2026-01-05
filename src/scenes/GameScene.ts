@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import Slime from '../objects/Slime';
 import Ground from '../objects/Ground';
 import { GameConfig } from '../config';
+import { CameraShakeRig } from './CameraShakeRig';
 
 export default class GameScene extends Phaser.Scene {
     private slime!: Slime;
@@ -9,6 +10,9 @@ export default class GameScene extends Phaser.Scene {
     private isSpaceDown: boolean = false;
     private pointerDownCount: number = 0;  // Track multi-touch for mobile
     private gameStarted: boolean = false;
+
+    // Camera Shake
+    private shakeRig!: CameraShakeRig;
 
     // Camera transition state
     private isCameraTransitioning: boolean = false;
@@ -153,6 +157,9 @@ export default class GameScene extends Phaser.Scene {
 
         // ===== START SCREEN OVERLAY =====
         this.createStartScreen(width, height);
+
+        // Initialize Camera Shake Rig
+        this.shakeRig = new CameraShakeRig();
     }
 
     private createStartScreen(width: number, height: number) {
@@ -309,7 +316,13 @@ export default class GameScene extends Phaser.Scene {
 
         // Pixel Snapping
         next = Math.round(next);
-        this.cameras.main.scrollY = next;
+
+        // Update Shake Rig
+        this.shakeRig.update(dt, this.slime.chargeShake01, this.slime.airShake01);
+
+        // Apply Final Camera Position (Base + Shake)
+        this.cameras.main.scrollY = next + this.shakeRig.shakeY;
+        this.cameras.main.scrollX = this.shakeRig.shakeX;
 
 
 

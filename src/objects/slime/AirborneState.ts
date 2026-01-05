@@ -48,6 +48,27 @@ export class AirborneState implements ISlimeState {
 
         slime.y += slime.vy * dt;
 
+        // ===== SHAKE CALCULATION (Air Turbulence) =====
+        const shakeCfg = GameConfig.cameraShake;
+        if (shakeCfg.enable) {
+            const groundYi = slime.getGroundY();
+            const heightAboveGround = Math.max(0, groundYi - slime.y);
+            const air = shakeCfg.air;
+
+            if (heightAboveGround > air.refHeight) {
+                // log gain
+                const num = Math.log1p((heightAboveGround - air.refHeight) / air.refHeight);
+                const den = Math.log1p((air.maxHeight - air.refHeight) / air.refHeight);
+                const gain = Phaser.Math.Clamp(num / den, 0, 1);
+
+                slime.airShake01 = Math.pow(gain, air.pow);
+            } else {
+                slime.airShake01 = 0;
+            }
+        } else {
+            slime.airShake01 = 0;
+        }
+
         // ===== ACCUMULATE FAST-FALL ENERGY & TIME =====
         // Work = Force * velocity * time
         // FastFallTime = Duration of active input during descent

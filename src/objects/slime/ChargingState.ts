@@ -119,6 +119,79 @@ export class ChargingState implements ISlimeState {
                 slime.isInYellowZone = false; // Exited by reaching peak
             }
 
+            // ===== SHAKE CALCULATION (Visual Feel) =====
+            const shakeCfg = GameConfig.cameraShake;
+            if (shakeCfg.enable) {
+                // 1. Inputs
+                const H = slime.landingApexHeight;
+                const Href = shakeCfg.charge.heightRef;
+
+                // Hold Ratio R = fastFallDistance / totalFallDistance
+                const dist = Math.max(1, slime.landingFallDistance);
+                const fast = slime.landingFastFallDistance;
+                const R = Phaser.Math.Clamp(fast / dist, 0, 1);
+
+                // Proximity P
+                const P = Phaser.Math.Clamp(slime.currentCompression / Math.max(1e-6, slime.targetCompression), 0, 1);
+                slime.chargeProximity = P;
+
+                // 2. Height + Hold Gain
+                // x = (H / Href) * pow(R, gamma)
+                const x = (H / Href) * Math.pow(R, shakeCfg.charge.holdGamma);
+                // gain = log1p(k * x) / log1p(k * xMax)
+                const num = Math.log1p(shakeCfg.charge.k * x);
+                const den = Math.log1p(shakeCfg.charge.k * (shakeCfg.charge.xMax / Href)); // Approximate normalization
+                const heightHoldGain = Phaser.Math.Clamp(num / den, 0, 1);
+
+                // 3. Perfect Approach Tension
+                // smoothstep from pStart to pPeak
+                const pStart = shakeCfg.charge.pStart;
+                const pPeak = shakeCfg.charge.pPeak;
+                let perfectApproach = 0;
+
+                if (P < pStart) {
+                    perfectApproach = 0;
+                } else if (P >= pPeak) {
+                    perfectApproach = 1;
+                } else {
+                    const t = (P - pStart) / (pPeak - pStart);
+                    perfectApproach = t * t * (3 - 2 * t); // smoothstep
+                }
+
+                // Decay after peak
+                if (slime.reachedPeak) {
+                    // Exponential decay
+                    const decay = Math.exp(-slime.postPeakHoldTime / shakeCfg.charge.postPeakTau);
+                    perfectApproach *= decay;
+                }
+
+                // 4. Final Intensity
+                // chargeShake = gain * pow(approach, power)
+                const rawShake = heightHoldGain * Math.pow(perfectApproach, shakeCfg.charge.approachPow);
+                slime.chargeShake01 = Phaser.Math.Clamp(rawShake, 0, 1);
+
+                // 5. Visual Character Shake (Sprite only)
+                // Map 0..1 intensity to pixels
+                if (slime.chargeShake01 > 0.01) {
+                    // Random jitter for character (high freq)
+                    const spriteAmpX = shakeCfg.charge.ampXMax * 0.35; // 35% of camera shake
+                    const spriteAmpY = shakeCfg.charge.ampYMax * 0.35;
+
+                    // Use simple random for sprite to decouple from camera
+                    // scaling by intensity^2 for sharper dropoff
+                    const s = slime.chargeShake01 * slime.chargeShake01;
+                    slime.visualShakeX = (Math.random() - 0.5) * 2 * spriteAmpX * s;
+                    slime.visualShakeY = (Math.random() - 0.5) * 2 * spriteAmpY * s;
+                } else {
+                    slime.visualShakeX = 0;
+                    slime.visualShakeY = 0;
+                }
+            } else {
+                slime.chargeShake01 = 0;
+                slime.visualShakeX = 0;
+                slime.visualShakeY = 0;
+            }
+
 
             // Early Release
             if (justReleased && slime.contactHasInput) {

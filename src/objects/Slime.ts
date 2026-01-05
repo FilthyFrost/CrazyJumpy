@@ -83,6 +83,15 @@ export default class Slime {
     // Yellow spark particles for perfect timing
     private sparkEmitter!: Phaser.GameObjects.Particles.ParticleEmitter;
 
+    // Shake signals
+    public chargeShake01: number = 0;       // Intensity of charge shake (0..1)
+    public airShake01: number = 0;          // Intensity of air turbulence (0..1)
+    public chargeProximity: number = 0;     // Debug/Feedback: How close to perfect (0..1)
+
+    // Visual Shake (Sprite only)
+    public visualShakeX: number = 0;
+    public visualShakeY: number = 0;
+
     constructor(scene: Phaser.Scene, x: number, y: number, ground: Ground) {
         this.scene = scene;
         this.x = x;
@@ -379,6 +388,10 @@ export default class Slime {
             gy = surfY - (scaleY * 32 * 0.5);
             // 32 is original texture height. scaleY * 32 is current displayHeight.
         }
+
+        // Apply visual shake (if any)
+        gx += this.visualShakeX;
+        gy += this.visualShakeY;
 
         this.graphics.setPosition(gx, gy);
     }
