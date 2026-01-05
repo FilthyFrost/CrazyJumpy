@@ -12,7 +12,7 @@ export default class Ground {
     private width: number;
 
     // Block configuration
-    private readonly BLOCK_SIZE = 16;
+    private readonly BLOCK_SIZE = 64;  // Increased from 16 to 64 (4x) for mobile visibility
     private readonly LAYERS = 8;
     private readonly BLOCKS_PER_ROW: number;
 
@@ -70,7 +70,7 @@ export default class Ground {
         // No need to read from game.loop.delta or clamp
 
         const centerCol = playerX !== undefined
-            ? Math.floor((playerX + this.BLOCK_SIZE) / this.BLOCK_SIZE)
+            ? Math.floor(playerX / this.BLOCK_SIZE)
             : Math.floor(this.BLOCKS_PER_ROW / 2);
 
         // 1) Calculate external force (pressure distribution)
@@ -137,7 +137,7 @@ export default class Ground {
                 const offsetY = this.yOffset[col] * layerFactor;
 
                 block.setY(baseY + offsetY);
-                block.setScale(1, 1);
+                // REMOVED: block.setScale(1, 1) - this was resetting the displaySize!
             }
         }
     }
@@ -147,7 +147,7 @@ export default class Ground {
      * Used for player collision - player should follow ground surface
      */
     public getSurfaceOffsetAt(x: number): number {
-        const col = Math.floor((x + this.BLOCK_SIZE) / this.BLOCK_SIZE);
+        const col = Math.floor(x / this.BLOCK_SIZE);
         const clampedCol = Math.max(0, Math.min(this.BLOCKS_PER_ROW - 1, col));
         // Return only top layer offset (layerFactor = 1 for row 0)
         return this.yOffset[clampedCol] || 0;

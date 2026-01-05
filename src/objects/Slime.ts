@@ -101,22 +101,22 @@ export default class Slime {
 
         // Feedback text for Perfect/Normal/FAILED (world space, follows slime)
         this.feedbackText = scene.add.text(x, y - 80, '', {
-            fontSize: '64px',
+            fontSize: '96px',  // Increased from 64px for mobile visibility
             fontFamily: 'Arial',
             fontStyle: 'bold',
             color: '#ffffff',
             stroke: '#000000',
-            strokeThickness: 6
+            strokeThickness: 8  // Increased stroke
         }).setOrigin(0.5).setDepth(100).setAlpha(0);
 
         // Combo display (world space, BELOW slime)
         this.comboText = scene.add.text(x, y + 50, '', {
-            fontSize: '24px',
+            fontSize: '40px',  // Increased from 24px for mobile visibility
             fontFamily: 'Arial',
             fontStyle: 'bold',
             color: '#00ffff',
             stroke: '#000000',
-            strokeThickness: 4
+            strokeThickness: 6  // Increased stroke
         }).setOrigin(0.5, 0.5).setDepth(100).setAlpha(0);
 
         // Yellow spark particles for perfect timing feedback

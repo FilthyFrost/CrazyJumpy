@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import Slime from '../objects/Slime';
 import Ground from '../objects/Ground';
+import { GameConfig } from '../config';
 
 export default class GameScene extends Phaser.Scene {
     private slime!: Slime;
@@ -8,6 +9,10 @@ export default class GameScene extends Phaser.Scene {
     private isSpaceDown: boolean = false;
     private pointerDownCount: number = 0;  // Track multi-touch for mobile
     private gameStarted: boolean = false;
+
+    // Camera transition state
+    private isCameraTransitioning: boolean = false;
+    private cameraTransitionStartTime: number = 0;
 
     // Fixed timestep physics
     private accumulator: number = 0;
@@ -82,8 +87,10 @@ export default class GameScene extends Phaser.Scene {
         // 1. Create Ground
         this.ground = new Ground(this, groundY);
 
-        // 2. Create Slime - start at ground level with configurable offset
-        this.slime = new Slime(this, width / 2, this.ground.y - 30, this.ground);
+        // 2. Create Slime - start at ground level
+        // Player should sit ON the ground, so Y = ground.y - playerCollisionRadius
+        const playerRadius = GameConfig.display.playerCollisionRadius;
+        this.slime = new Slime(this, width / 2, this.ground.y - playerRadius, this.ground);
 
         // 3. Input - Keyboard
         this.input.keyboard?.on('keydown-SPACE', () => { this.isSpaceDown = true; });
@@ -126,22 +133,22 @@ export default class GameScene extends Phaser.Scene {
 
         // Meter HUD - adjusted position for mobile
         this.heightText = this.add.text(width / 2, height - 30, '0.0m', {
-            fontSize: '28px',
+            fontSize: '48px',  // Increased from 28px for mobile visibility
             color: '#ffffff',
             align: 'center',
             fontStyle: 'bold',
             stroke: '#000000',
-            strokeThickness: 4
+            strokeThickness: 6  // Increased stroke for better contrast
         }).setOrigin(0.5, 1).setScrollFactor(0).setDepth(200);
 
         // Milestone Graphics (draws in world space)
         this.milestoneGraphics = this.add.graphics();
         this.milestoneText = this.add.text(0, 0, '', {
-            fontSize: '18px',
+            fontSize: '32px',  // Increased from 18px for mobile visibility
             color: '#ffff00',
             fontStyle: 'bold',
             stroke: '#000000',
-            strokeThickness: 3
+            strokeThickness: 5  // Increased stroke
         }).setDepth(50);
 
         // ===== START SCREEN OVERLAY =====
@@ -155,18 +162,18 @@ export default class GameScene extends Phaser.Scene {
 
         // Title
         const title = this.add.text(width / 2, height * 0.3, '🟢 Slime Jump 🟢', {
-            fontSize: '64px',
+            fontSize: '96px',  // Increased from 64px for mobile visibility
             fontFamily: 'Arial',
             fontStyle: 'bold',
             color: '#00ff00',
             stroke: '#000000',
-            strokeThickness: 6
+            strokeThickness: 8  // Increased stroke
         }).setOrigin(0.5).setScrollFactor(0);
 
         // Instructions (for both desktop and mobile)
         const instructions = this.add.text(width / 2, height * 0.5,
             '按住屏幕 或 SPACE 快速下落\n在黄色状态松开 = PERFECT\n连续 3 次 PERFECT = 2x 力量!', {
-            fontSize: '20px',
+            fontSize: '32px',  // Increased from 20px for mobile visibility
             fontFamily: 'Arial',
             color: '#ffffff',
             align: 'center',
@@ -175,12 +182,12 @@ export default class GameScene extends Phaser.Scene {
 
         // Start Button
         this.startButton = this.add.text(width / 2, height * 0.75, '[ 点击开始 ]', {
-            fontSize: '48px',
+            fontSize: '72px',  // Increased from 48px for mobile visibility
             fontFamily: 'Arial',
             fontStyle: 'bold',
             color: '#ffff00',
             stroke: '#000000',
-            strokeThickness: 4
+            strokeThickness: 6  // Increased stroke
         }).setOrigin(0.5).setScrollFactor(0).setInteractive({ useHandCursor: true });
 
         // Hover effect
@@ -213,6 +220,14 @@ export default class GameScene extends Phaser.Scene {
     private startGame() {
         this.gameStarted = true;
         this.startOverlay.destroy();
+
+        // Reset input state to prevent start button click from causing immediate jump
+        this.isSpaceDown = false;
+        this.pointerDownCount = 0;
+
+        // Start camera transition
+        this.isCameraTransitioning = true;
+        this.cameraTransitionStartTime = this.time.now;
     }
 
     update(_time: number, delta: number) {
@@ -259,31 +274,50 @@ export default class GameScene extends Phaser.Scene {
         // Desired Scroll = WorldY - ScreenY
         const desired = this.slime.y - targetScreenY;
 
-        // Note: WE DO NOT CLAMP desired to 0 here. 
-        // Allowing positive scrollY means we can track the player *into* the ground deformation,
-        // which creates the "impact tension" the user wants.
-
         const current = this.cameras.main.scrollY;
+        let next = current;
 
-        // Dynamic Catch-up Speed
-        // Base speed needs to be fast enough to feel "attached" but smooth enough to absorb jitter
-        const maxSpeed = Math.max(3000, Math.abs(this.slime.vy) + 1500);
-        const maxStep = maxSpeed * dt;
+        // --- Camera Logic Selection ---
+        if (this.isCameraTransitioning) {
+            // SMOOTH START TRANSITION (2 seconds duration)
+            const duration = 2000;
+            const progress = (this.time.now - this.cameraTransitionStartTime) / duration;
 
-        // Robust Move-Towards
-        let next = current + Phaser.Math.Clamp(desired - current, -maxStep, maxStep);
+            if (progress >= 1.0) {
+                this.isCameraTransitioning = false; // Transition complete
+                next = desired;
+            } else {
+                // Ease out cubic for smooth arrival
+                const t = 1 - Math.pow(1 - progress, 3);
+                const startScroll = 0; // Assuming menu starts at 0
+                next = startScroll + (desired - startScroll) * t;
+            }
+        } else {
+            // NORMAL GAMEPLAY TRACKING
+            // Note: WE DO NOT CLAMP desired to 0 here. 
+            // Allowing positive scrollY means we can track the player *into* the ground deformation,
+            // which creates the "impact tension" the user wants.
+
+            // Dynamic Catch-up Speed
+            // Base speed needs to be fast enough to feel "attached" but smooth enough to absorb jitter
+            const maxSpeed = Math.max(3000, Math.abs(this.slime.vy) + 1500);
+            const maxStep = maxSpeed * dt;
+
+            // Robust Move-Towards
+            next = current + Phaser.Math.Clamp(desired - current, -maxStep, maxStep);
+        }
 
         // Pixel Snapping
         next = Math.round(next);
-
         this.cameras.main.scrollY = next;
 
 
 
         // HUD Update
-        const groundSurface = this.ground.y - this.slime.radius;
-        const currentY = this.slime.y;
-        const heightPixels = Math.max(0, groundSurface - currentY);
+        // Height should be measured from player's TOP (head) to ground surface
+        const groundSurface = this.ground.y;  // Actual ground surface position
+        const playerTop = this.slime.y - this.slime.radius;  // Top of player's head
+        const heightPixels = Math.max(0, groundSurface - playerTop);
         const heightMeters = heightPixels / this.pixelsPerMeter;
 
         this.heightText.setText(`${heightMeters.toFixed(1)}m`);
@@ -293,6 +327,7 @@ export default class GameScene extends Phaser.Scene {
         this.skyBg.tilePositionY = Math.round(this.cameras.main.scrollY * 0.1);
 
         // ===== MILESTONE TRACKING =====
+        // Milestone line marks the highest point the player's HEAD has reached
         this.updateMilestone(groundSurface, heightPixels);
     }
 
@@ -304,7 +339,9 @@ export default class GameScene extends Phaser.Scene {
             // Clear and redraw milestone line
             this.milestoneGraphics.clear();
 
-            const lineY = groundSurface - this.recordHeight;
+            // Apply configurable offset for manual fine-tuning
+            const milestoneOffset = GameConfig.milestone?.yOffset ?? 0;
+            const lineY = groundSurface - this.recordHeight + milestoneOffset;
             const width = this.scale.width;
 
             // Draw horizontal line
