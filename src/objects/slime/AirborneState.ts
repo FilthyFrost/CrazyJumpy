@@ -53,8 +53,15 @@ export class AirborneState implements ISlimeState {
         // FastFallTime = Duration of active input during descent
         // CRITICAL: Only accumulate while actively holding button (isSpaceDown)
         // Post-release decay tail (userAccel > 0 but !isSpaceDown) must NOT inflate energy
+        // Energy calculation uses CAPPED values to prevent extreme physics from breaking balance
         if (isSpaceDown && slime.vy > 0 && slime.userAccel > 0) {
-            slime.fastFallEnergy += slime.userAccel * slime.vy * dt;
+            const vEnergyCap = (GameConfig.air as any).energyVyCap ?? 6000;
+            const aEnergyCap = (GameConfig.air as any).energyAccelCap ?? 6000;
+
+            const vEff = Math.min(slime.vy, vEnergyCap);
+            const aEff = Math.min(slime.userAccel, aEnergyCap);
+
+            slime.fastFallEnergy += aEff * vEff * dt;
             slime.fastFallTime += dt;
         }
 

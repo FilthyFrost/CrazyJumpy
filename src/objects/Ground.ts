@@ -19,6 +19,7 @@ export default class Ground {
     // Spring physics state
     private yOffset: number[] = [];   // Current Y offset for each column (positive = down)
     private yVel: number[] = [];      // Velocity for each column
+    private force: number[] = [];     // Cached force array (avoid per-frame allocation)
 
     // Physics constants (tune these for feel)
     private readonly TENSION = 180;    // kt: neighbor coupling (higher = smoother, more wave propagation)
@@ -36,6 +37,7 @@ export default class Ground {
         for (let col = 0; col < this.BLOCKS_PER_ROW; col++) {
             this.yOffset[col] = 0;
             this.yVel[col] = 0;
+            this.force[col] = 0;  // Pre-allocate force array
         }
 
         this.createBlockGrid();
@@ -73,7 +75,10 @@ export default class Ground {
 
         // 1) Calculate external force (pressure distribution)
         // Positive force = push DOWN (into ground)
-        const force: number[] = new Array(this.BLOCKS_PER_ROW).fill(0);
+        // Clear force array (reuse instead of allocating)
+        for (let i = 0; i < this.BLOCKS_PER_ROW; i++) {
+            this.force[i] = 0;
+        }
 
         if (depressionDepth > 0) {
             const sigma = 1.6;               // Foot width (in columns)
@@ -83,7 +88,7 @@ export default class Ground {
             for (let i = Math.max(0, centerCol - radius); i <= Math.min(this.BLOCKS_PER_ROW - 1, centerCol + radius); i++) {
                 const d = i - centerCol;
                 const g = Math.exp(-(d * d) / (2 * sigma * sigma));
-                force[i] += P * g;  // Positive = push down
+                this.force[i] += P * g;  // Positive = push down
             }
         }
 
@@ -108,7 +113,7 @@ export default class Ground {
                     this.TENSION * laplacian
                     - this.STIFFNESS * y
                     - this.DAMPING * v
-                    + force[i];
+                    + this.force[i];
 
                 // Semi-implicit Euler integration
                 this.yVel[i] = v + a * h;

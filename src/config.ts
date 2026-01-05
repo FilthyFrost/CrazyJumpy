@@ -24,6 +24,10 @@ export const GameConfig = {
 
         // Energy Charge Time
         fastFallChargeTime: 0.25,     // 需要按住多久才能获得满额收益 (秒)
+
+        // Energy Calculation Caps (decouple from visual physics)
+        energyVyCap: 6000,            // 能量计算的速度上限 (防止极端终端速度导致失衡)
+        energyAccelCap: 6000,         // 能量计算的加速度上限
     },
 
     // ===================================================================

@@ -6,6 +6,7 @@ export default class GameScene extends Phaser.Scene {
     private slime!: Slime;
     private ground!: Ground;
     private isSpaceDown: boolean = false;
+    private pointerDownCount: number = 0;  // Track multi-touch for mobile
     private gameStarted: boolean = false;
 
     // Fixed timestep physics
@@ -89,14 +90,39 @@ export default class GameScene extends Phaser.Scene {
         this.input.keyboard?.on('keyup-SPACE', () => { this.isSpaceDown = false; });
 
         // 4. Input - Touch (for mobile: touch = space)
-        this.input.on('pointerdown', () => { this.isSpaceDown = true; });
-        this.input.on('pointerup', () => { this.isSpaceDown = false; });
+        // Use pointer counter to properly handle multi-touch
+        this.input.on('pointerdown', () => {
+            this.pointerDownCount++;
+            this.isSpaceDown = true;
+        });
+        this.input.on('pointerup', () => {
+            this.pointerDownCount--;
+            if (this.pointerDownCount <= 0) {
+                this.pointerDownCount = 0;
+                this.isSpaceDown = false;
+            }
+        });
 
         // 5. Input Safety - Prevent stuck input on mobile/browser edge cases
-        this.input.on('pointerupoutside', () => { this.isSpaceDown = false; });
-        this.input.on('pointercancel', () => { this.isSpaceDown = false; });
-        this.game.events.on('blur', () => { this.isSpaceDown = false; });
-        this.game.events.on('hidden', () => { this.isSpaceDown = false; });
+        this.input.on('pointerupoutside', () => {
+            this.pointerDownCount--;
+            if (this.pointerDownCount <= 0) {
+                this.pointerDownCount = 0;
+                this.isSpaceDown = false;
+            }
+        });
+        this.input.on('pointercancel', () => {
+            this.pointerDownCount = 0;
+            this.isSpaceDown = false;
+        });
+        this.game.events.on('blur', () => {
+            this.pointerDownCount = 0;
+            this.isSpaceDown = false;
+        });
+        this.game.events.on('hidden', () => {
+            this.pointerDownCount = 0;
+            this.isSpaceDown = false;
+        });
 
         // Meter HUD - adjusted position for mobile
         this.heightText = this.add.text(width / 2, height - 30, '0.0m', {
