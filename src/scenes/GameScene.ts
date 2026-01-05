@@ -181,7 +181,6 @@ export default class GameScene extends Phaser.Scene {
         const width = this.scale.width;
         const height = this.scale.height;
 
-
         // Target Aspect Ratio: 9:16 (0.5625)
         const targetAspect = 9 / 16;
         const currentAspect = width / height;
@@ -197,13 +196,6 @@ export default class GameScene extends Phaser.Scene {
             safeY = 0;
         } else {
             // Screen is taller/narrower than 9:16 (e.g. Modern Phones)
-            // Constrain height by width? OR just use full width
-            // Logic: "Safe Frame" usually means main content shouldn't exceed this box.
-            // For tall phones, we usually fill width and center vertically (or top align).
-            // But user requested "unified 9:16 safe frame frame". 
-            // If screen is TALLER than 9:16 (e.g. 19.5:9), we clamp to 9:16 height?
-            // "UI forever centered 9:16". 
-
             safeW = width;
             safeH = width / targetAspect;
             safeX = 0;
@@ -222,6 +214,8 @@ export default class GameScene extends Phaser.Scene {
         const zoom = this.cameras.main.zoom;
 
         // 1. Sky Background: Always fullscreen
+        // Since camera is zoomed, the visible world area is larger.
+        // We need skyBg to cover (width/zoom, height/zoom).
         if (this.skyBg) {
             this.skyBg.setPosition(width / 2, height / 2);
             this.skyBg.setSize(width / zoom, height / zoom);
@@ -235,9 +229,6 @@ export default class GameScene extends Phaser.Scene {
             this.heightText.setStroke('#000000', Math.max(4, fs * 0.1));
 
             // Position: Bottom of Safe Frame (minus padding)
-            // But ensure it doesn't go off screen if safeFrame > screenHeight (unlikely with our logic)
-            // If screen is taller than safe frame (e.g. iPhone X), safe frame is centered.
-            // We might want HUD at bottom of SAFE FRAME.
             this.heightText.setPosition(width / 2, sf.y + sf.height * 0.9);
         }
 
@@ -453,10 +444,10 @@ export default class GameScene extends Phaser.Scene {
 
 
         // HUD Update
-        // Height should be measured from player's TOP (head) to ground surface
-        const groundSurface = this.ground.y;  // Actual ground surface position
-        const playerTop = this.slime.y - this.slime.radius;  // Top of player's head
-        const heightPixels = Math.max(0, groundSurface - playerTop);
+        // Height = Distance from ground to player's FEET (0m when standing)
+        const groundLevel = this.ground.y;
+        const currentFeet = this.slime.y + this.slime.radius;
+        const heightPixels = Math.max(0, groundLevel - currentFeet);
         const heightMeters = heightPixels / this.pixelsPerMeter;
 
         this.heightText.setText(`${heightMeters.toFixed(1)}m`);
@@ -465,35 +456,42 @@ export default class GameScene extends Phaser.Scene {
         // Move sky tilePosition based on camera scroll (creates infinite loop effect)
         this.skyBg.tilePositionY = Math.round(this.cameras.main.scrollY * 0.1);
 
-        // ===== MILESTONE TRACKING =====
-        // Milestone line marks the highest point the player's HEAD has reached
-        this.updateMilestone(groundSurface, heightPixels);
+        // ===== MILESTONE TRACKING (tracks HEAD height) =====
+        const currentHead = this.slime.y - this.slime.radius;
+        const headHeightPixels = Math.max(0, groundLevel - currentHead);
+        this.updateMilestone(groundLevel, headHeightPixels);
     }
 
-    private updateMilestone(groundSurface: number, currentHeightPixels: number) {
+    private updateMilestone(groundLevel: number, currentHeadHeightPixels: number) {
+        const cam = this.cameras.main;
+        const visibleLeft = cam.scrollX;
+
         // Check for new record
-        if (currentHeightPixels > this.recordHeight) {
-            this.recordHeight = currentHeightPixels;
-
-            // Clear and redraw milestone line
-            this.milestoneGraphics.clear();
-
-            // Apply configurable offset for manual fine-tuning
-            const milestoneOffset = GameConfig.milestone?.yOffset ?? 0;
-            const lineY = groundSurface - this.recordHeight + milestoneOffset;
-            const width = this.scale.width;
-
-            // Draw horizontal line
-            this.milestoneGraphics.lineStyle(2, 0xffff00, 0.8);
-            this.milestoneGraphics.beginPath();
-            this.milestoneGraphics.moveTo(0, lineY);
-            this.milestoneGraphics.lineTo(width, lineY);
-            this.milestoneGraphics.strokePath();
-
-            // Update milestone text
-            const meters = this.recordHeight / this.pixelsPerMeter;
-            this.milestoneText.setText(`🏆 ${meters.toFixed(1)}m`);
-            this.milestoneText.setPosition(10, lineY - 25);
+        if (currentHeadHeightPixels > this.recordHeight) {
+            this.recordHeight = currentHeadHeightPixels;
         }
+
+        // Always redraw to keep text at screen edge
+        this.milestoneGraphics.clear();
+
+        // Apply configurable offset for manual fine-tuning
+        const milestoneOffset = GameConfig.milestone?.yOffset ?? 0;
+
+        // Line Y: where the HEAD was at record height
+        const lineY = groundLevel - this.recordHeight + milestoneOffset;
+
+        // Draw horizontal line (very wide to cover zoom)
+        this.milestoneGraphics.lineStyle(2, 0xffff00, 0.8);
+        this.milestoneGraphics.beginPath();
+        this.milestoneGraphics.moveTo(visibleLeft - 5000, lineY);
+        this.milestoneGraphics.lineTo(visibleLeft + 15000, lineY);
+        this.milestoneGraphics.strokePath();
+
+        // Milestone text at left edge of screen
+        const textX = visibleLeft + 10;
+        const meters = this.recordHeight / this.pixelsPerMeter;
+
+        this.milestoneText.setText(`🏆 ${meters.toFixed(1)}m`);
+        this.milestoneText.setPosition(textX, lineY - 25);
     }
 }
