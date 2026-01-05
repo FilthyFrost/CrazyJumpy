@@ -11,9 +11,10 @@ const config: Phaser.Types.Core.GameConfig = {
 
   // Fixed portrait dimensions with FIT scaling
   scale: {
-    mode: Phaser.Scale.RESIZE, // Use full available space (no white bars)
+    mode: Phaser.Scale.FIT,  // Fit to screen while maintaining aspect ratio
     autoCenter: Phaser.Scale.CENTER_BOTH,
-    // width/height are ignored in RESIZE mode, but we can remove them to be clean
+    width: 720,   // Base resolution (9:16 aspect ratio)
+    height: 1280,
   },
 
   pixelArt: true,
