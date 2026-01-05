@@ -11,6 +11,7 @@ export default class Ground {
     private scene: Phaser.Scene;
     public y: number;
     private width: number;
+    private startX: number; // Starting X position for the first block (col 0)
 
     // Block configuration
     private readonly BLOCK_SIZE = 64;
@@ -45,7 +46,24 @@ export default class Ground {
         this.scene = scene;
         this.y = y;
         this.width = scene.scale.width;
-        this.BLOCKS_PER_ROW = Math.ceil(this.width / this.BLOCK_SIZE) + 4;
+
+        // Calculate visible width based on zoom, but add HUGE safety margin
+        // We multiply by 3 to cover:
+        // 1. Initial wide aspect ratios (desktop landscape)
+        // 2. Zooming out (0.85)
+        // 3. Resizing window after load (e.g. rotation)
+        const zoom = GameConfig.display.zoom ?? 1.0;
+        // Use MAX dimension to safely cover landscape even if started in portrait
+        const visibleWidth = Math.max(this.width, this.scene.scale.height) / zoom;
+
+        // Add plenty of padding blocks (e.g., extra 50% width buffer + 20 cols)
+        // This ensures that even if the camera sees more, we have blocks.
+        const paddingCols = 20;
+        this.BLOCKS_PER_ROW = Math.ceil(visibleWidth / this.BLOCK_SIZE * 1.5) + paddingCols * 2;
+
+        // Center the grid
+        const totalGridWidth = this.BLOCKS_PER_ROW * this.BLOCK_SIZE;
+        this.startX = (this.width - totalGridWidth) / 2;
 
         // Initialize physics arrays
         for (let col = 0; col < this.BLOCKS_PER_ROW; col++) {
@@ -65,7 +83,7 @@ export default class Ground {
         for (let row = 0; row < this.LAYERS; row++) {
             this.blocks[row] = [];
             for (let col = 0; col < this.BLOCKS_PER_ROW; col++) {
-                const x = col * this.BLOCK_SIZE + this.BLOCK_SIZE / 2;
+                const x = this.startX + col * this.BLOCK_SIZE + this.BLOCK_SIZE / 2;
                 const baseY = this.y + row * this.BLOCK_SIZE + this.BLOCK_SIZE / 2;
 
                 const block = this.scene.add.image(x, baseY, 'ground_block')
@@ -92,7 +110,7 @@ export default class Ground {
 
         // 2. Local Ripple Impulse
         if (cfg.ripple.enable) {
-            const centerCol = Math.floor(impactX / this.BLOCK_SIZE);
+            const centerCol = Math.floor((impactX - this.startX) / this.BLOCK_SIZE);
             const r = cfg.ripple.radiusCols;
 
             // Apply impulse to columns
@@ -166,8 +184,9 @@ export default class Ground {
         }
 
         // --- 3. Ground Physics Simulation (Real Deformation) ---
+        // Need to offset playerX by startX to find correct column
         const centerCol = playerX !== undefined
-            ? Math.floor(playerX / this.BLOCK_SIZE)
+            ? Math.floor((playerX - this.startX) / this.BLOCK_SIZE)
             : Math.floor(this.BLOCKS_PER_ROW / 2);
 
         // Calculate forces
@@ -232,7 +251,8 @@ export default class Ground {
                 const visualRippleY = (cfg.ripple.enable ? this.rippleOffset[col] : 0) * layerFactor;
 
                 // Final Position
-                const finalX = (col * this.BLOCK_SIZE + this.BLOCK_SIZE / 2) + visualGlobalX;
+                // IMPORTANT: MUST USE startX HERE TOO!
+                const finalX = (this.startX + col * this.BLOCK_SIZE + this.BLOCK_SIZE / 2) + visualGlobalX;
                 const finalY = baseY + deformY + visualGlobalY + visualRippleY;
 
                 block.setPosition(finalX, finalY);
@@ -244,7 +264,7 @@ export default class Ground {
      * Get the surface offset at a given X position
      */
     public getSurfaceOffsetAt(x: number): number {
-        const col = Math.floor(x / this.BLOCK_SIZE);
+        const col = Math.floor((x - this.startX) / this.BLOCK_SIZE);
         const clampedCol = Math.max(0, Math.min(this.BLOCKS_PER_ROW - 1, col));
         return this.yOffset[clampedCol] || 0;
     }
