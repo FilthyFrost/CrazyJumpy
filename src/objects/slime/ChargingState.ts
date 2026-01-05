@@ -186,6 +186,8 @@ export class ChargingState implements ISlimeState {
                     slime.visualShakeX = 0;
                     slime.visualShakeY = 0;
                 }
+                // Sync Ground Tremor
+                slime.ground.setChargeTremor(slime.chargeShake01);
             } else {
                 slime.chargeShake01 = 0;
                 slime.visualShakeX = 0;

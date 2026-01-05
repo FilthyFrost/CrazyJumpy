@@ -139,6 +139,36 @@ export class AirborneState implements ISlimeState {
             const Href = (g.difficultyRefHeight ?? 5000) as number;
             slime.landingDifficulty = Math.max(1, slime.landingApexHeight / Math.max(1, Href));
 
+            // ===== GROUND IMPACT SHAKE =====
+            const shakeCfg = GameConfig.groundShake;
+            if (shakeCfg.enable) {
+                const H = slime.landingApexHeight;
+                const dist = Math.max(1, slime.landingFallDistance);
+                const fast = slime.landingFastFallDistance;
+                // Clamp R to 0..1
+                const R = Phaser.Math.Clamp(fast / dist, 0, 1);
+
+                // Formula: x = (H / Href) * modifier(R)
+                // We ensure at least 30% shake effectiveness even without holding space
+                // so that high drops still feel heavy.
+                const rFactor = 0.3 + 0.7 * Math.pow(R, shakeCfg.holdGamma);
+                const x = (H / shakeCfg.heightRef) * rFactor;
+
+                // Log Gain
+                const num = Math.log1p(shakeCfg.k * x);
+                const den = Math.log1p(shakeCfg.k * (shakeCfg.xMax / shakeCfg.heightRef));
+
+                // Velocity Boost (Optional: stronger impact if falling fast)
+                // vRef ~ 1000, 
+                const vGain = Math.min(1, Math.abs(slime.impactSpeed) / 4000);
+
+                let intensity = Phaser.Math.Clamp(num / den, 0, 1);
+                // Boost slightly by velocity
+                intensity *= (0.8 + 0.2 * vGain);
+
+                slime.ground.onLandingImpact(slime.x, Phaser.Math.Clamp(intensity, 0, 1));
+            }
+
             // Transition
             slime.transitionTo('GROUND_CHARGING');
             // We need to pass the "contactHasInput" state if they were holding space on landing
