@@ -3,6 +3,7 @@ import Slime from '../objects/Slime';
 import Ground from '../objects/Ground';
 import { GameConfig } from '../config';
 import { CameraShakeRig } from './CameraShakeRig';
+import SkyGradientLUT from '../objects/SkyGradientLUT';
 
 export default class GameScene extends Phaser.Scene {
     private slime!: Slime;
@@ -37,11 +38,16 @@ export default class GameScene extends Phaser.Scene {
     private milestoneText!: Phaser.GameObjects.Text;
     private pixelsPerMeter: number = 50;
 
-    // Sky background for seamless scrolling
-    private skyBg!: Phaser.GameObjects.TileSprite;
+    // Height-driven gradient background system
+    private skyGradient!: SkyGradientLUT;
 
     // 9:16 Safe Frame
     private safeFrame!: { x: number, y: number, width: number, height: number };
+
+    // Game over screen
+    private gameOverOverlay?: Phaser.GameObjects.Container;
+    private isGameOver: boolean = false;
+    private isPlayingDeathAnimation: boolean = false;
 
     constructor() {
         super('GameScene');
@@ -55,8 +61,27 @@ export default class GameScene extends Phaser.Scene {
             frameHeight: 32
         });
         this.load.image('ground_block', 'assets/tiles/ground_block.png');
-        this.load.image('sky', 'assets/backgrounds/sky.png');
-        this.load.image('forest', 'assets/backgrounds/forest.png');
+
+        // Load gradient LUT for height-driven background
+        this.load.image('渐变色调图', 'assets/lut/渐变色调图.png');
+
+        // Load death animation frames (12 frames)
+        for (let i = 1; i <= 12; i++) {
+            const frameNum = String(i).padStart(4, '0');
+            this.load.image(`die_${i}`, `assets/DIE STATE/HumanSoulDie_${frameNum}.png`);
+        }
+
+        // Load idle animation frames (8 frames)
+        for (let i = 1; i <= 8; i++) {
+            const frameNum = String(i).padStart(4, '0');
+            this.load.image(`idle_${i}`, `assets/HumanIdle State/HumanIdle_${frameNum}.png`);
+        }
+
+        // Load jump animation frames (4 frames)
+        for (let i = 1; i <= 4; i++) {
+            const frameNum = String(i).padStart(4, '0');
+            this.load.image(`jump_${i}`, `assets/Jump State/Jump_${frameNum}.png`);
+        }
 
         // Create spark texture dynamically
         const sparkGraphics = this.make.graphics({ x: 0, y: 0 });
@@ -70,25 +95,90 @@ export default class GameScene extends Phaser.Scene {
         const { width, height } = this.scale;
         const groundY = height * 0.8;
 
+        // ===== RESET STATE ON SCENE RESTART =====
+        this.isGameOver = false;
+        this.isPlayingDeathAnimation = false;
+        this.gameStarted = false;
+        this.isSpaceDown = false;
+        this.pointerDownCount = 0;
+        this.recordHeight = 0;
+        this.accumulator = 0;
+        this.isCameraTransitioning = false;
+
         // Crisp rendering
         this.cameras.main.roundPixels = true;
 
-        // ===== BACKGROUND LAYERS =====
-        // Sky background - seamless vertical scrolling (infinite loop)
-        // Store reference for manual tilePosition update
-        this.skyBg = this.add.tileSprite(width / 2, height / 2, width, height, 'sky')
-            .setOrigin(0.5, 0.5)
-            .setScrollFactor(0)  // Fixed to camera, we scroll internally
-            .setDepth(-100);
+        // ===== HEIGHT-DRIVEN GRADIENT BACKGROUND =====
+        // Initialize gradient LUT system (replaces static background images)
+        this.skyGradient = new SkyGradientLUT(
+            this,
+            '渐变色调图',
+            groundY
+        );
 
-        // Forest layer removed - was causing blue stripe issue
+        // ===== CHARACTER ANIMATION STATE MACHINE =====
 
-        // Create jump animation from row 3 (frames 12-17, 0-indexed)
+        // Idle animation (on ground, no input) - 8 frames, looping
+        this.anims.create({
+            key: 'idle',
+            frames: [
+                { key: 'idle_1' }, { key: 'idle_2' }, { key: 'idle_3' }, { key: 'idle_4' },
+                { key: 'idle_5' }, { key: 'idle_6' }, { key: 'idle_7' }, { key: 'idle_8' }
+            ],
+            frameRate: 8,
+            repeat: -1  // Loop forever
+        });
+
+        // Jump Rise animation (going up, vy < 0) - first 2 frames, play once and hold on frame 2
+        this.anims.create({
+            key: 'jump_rise',
+            frames: [
+                { key: 'jump_1' }, { key: 'jump_2' }
+            ],
+            frameRate: 12,
+            repeat: 0  // Play once and stop at last frame
+        });
+
+        // Jump Fall animation (going down, vy > 0) - last 2 frames, play once and hold on frame 4
+        this.anims.create({
+            key: 'jump_fall',
+            frames: [
+                { key: 'jump_3' }, { key: 'jump_4' }
+            ],
+            frameRate: 12,
+            repeat: 0  // Play once and stop at last frame
+        });
+
+        // Jump Land animation (on ground, charging) - hold last frame
+        this.anims.create({
+            key: 'jump_land',
+            frames: [
+                { key: 'jump_4' }
+            ],
+            frameRate: 1,
+            repeat: 0
+        });
+
+        // Full jump animation (all 4 frames, for compatibility)
         this.anims.create({
             key: 'jump',
-            frames: this.anims.generateFrameNumbers('cyclop', { start: 12, end: 17 }),
+            frames: [
+                { key: 'jump_1' }, { key: 'jump_2' }, { key: 'jump_3' }, { key: 'jump_4' }
+            ],
             frameRate: 10,
-            repeat: -1  // Loop the animation
+            repeat: -1
+        });
+
+        // Create death animation from individual frames
+        this.anims.create({
+            key: 'die',
+            frames: [
+                { key: 'die_1' }, { key: 'die_2' }, { key: 'die_3' }, { key: 'die_4' },
+                { key: 'die_5' }, { key: 'die_6' }, { key: 'die_7' }, { key: 'die_8' },
+                { key: 'die_9' }, { key: 'die_10' }, { key: 'die_11' }, { key: 'die_12' }
+            ],
+            frameRate: 12,
+            repeat: 0  // Play once only
         });
 
         // 1. Create Ground
@@ -211,15 +301,6 @@ export default class GameScene extends Phaser.Scene {
         const sf = this.safeFrame;
         const width = this.scale.width; // Screen width (for background)
         const height = this.scale.height;
-        const zoom = this.cameras.main.zoom;
-
-        // 1. Sky Background: Always fullscreen
-        // Since camera is zoomed, the visible world area is larger.
-        // We need skyBg to cover (width/zoom, height/zoom).
-        if (this.skyBg) {
-            this.skyBg.setPosition(width / 2, height / 2);
-            this.skyBg.setSize(width / zoom, height / zoom);
-        }
 
         // 2. HUD: Bottom of Safe Frame
         if (this.heightText) {
@@ -360,6 +441,40 @@ export default class GameScene extends Phaser.Scene {
             return;
         }
 
+        // Don't update if game is over
+        if (this.isGameOver) {
+            return;
+        }
+
+        // During death animation: skip physics but keep camera/visuals running
+        if (this.isPlayingDeathAnimation) {
+            const dt = delta / 1000;
+            // Update ground with 0 compression so deformation recovers to normal
+            this.ground.render(dt, 0, this.slime.x);
+
+            // Move slime sprite to follow ground surface as it recovers
+            // But clamp to never go above normal ground level
+            const surfaceOffset = this.ground.getSurfaceOffsetAt(this.slime.x);
+            const corpseYOffset = GameConfig.display.corpseYOffset ?? 80;
+
+            // Normal ground position (feet at ground level, no deformation) + corpse offset
+            const normalGroundY = this.ground.y - this.slime.radius + corpseYOffset;
+
+            // Current deformed ground position + corpse offset
+            const deformedGroundY = this.ground.y + surfaceOffset - this.slime.radius + corpseYOffset;
+
+            // Use the lower position (higher Y value in Phaser = lower on screen)
+            // This ensures corpse follows ground up but never goes above normal level
+            const clampedY = Math.max(normalGroundY, deformedGroundY);
+
+            this.slime.y = clampedY;
+            this.slime.graphics.setPosition(this.slime.x, clampedY);
+
+            // Update gradient background
+            this.skyGradient.update(this.slime.y);
+            return;
+        }
+
         // ===== FIXED TIMESTEP PHYSICS =====
         // Prevents low-FPS "slow motion" exploit where players get longer reaction windows
         // Physics always runs at FIXED_DT regardless of actual framerate
@@ -452,14 +567,25 @@ export default class GameScene extends Phaser.Scene {
 
         this.heightText.setText(`${heightMeters.toFixed(1)}m`);
 
-        // ===== SKY SEAMLESS SCROLLING =====
-        // Move sky tilePosition based on camera scroll (creates infinite loop effect)
-        this.skyBg.tilePositionY = Math.round(this.cameras.main.scrollY * 0.1);
+        // ===== UPDATE GRADIENT BACKGROUND =====
+        // Update background color based on player height
+        this.skyGradient.update(this.slime.y);
 
         // ===== MILESTONE TRACKING (tracks HEAD height) =====
         const currentHead = this.slime.y - this.slime.radius;
         const headHeightPixels = Math.max(0, groundLevel - currentHead);
         this.updateMilestone(groundLevel, headHeightPixels);
+
+        // ===== DEATH DETECTION =====
+        if (this.slime.healthManager.isDead && !this.isGameOver && !this.isPlayingDeathAnimation) {
+            // Block all input immediately
+            this.isPlayingDeathAnimation = true;
+
+            // Play death animation, then show game over
+            this.slime.playDeathAnimation(() => {
+                this.showGameOver();
+            });
+        }
     }
 
     private updateMilestone(groundLevel: number, currentHeadHeightPixels: number) {
@@ -493,5 +619,72 @@ export default class GameScene extends Phaser.Scene {
 
         this.milestoneText.setText(`🏆 ${meters.toFixed(1)}m`);
         this.milestoneText.setPosition(textX, lineY - 25);
+    }
+
+    private showGameOver() {
+        this.isGameOver = true;
+
+        const width = this.scale.width;
+        const height = this.scale.height;
+
+        // Dark overlay
+        const overlay = this.add.rectangle(width / 2, height / 2, width, height, 0x000000, 0.8)
+            .setScrollFactor(0)
+            .setDepth(2000);
+
+        // Game Over title
+        const gameOverText = this.add.text(width / 2, height * 0.3, '💀 游戏结束 💀', {
+            fontSize: '72px',
+            fontFamily: 'Arial',
+            fontStyle: 'bold',
+            color: '#ff0000',
+            stroke: '#000000',
+            strokeThickness: 8
+        }).setOrigin(0.5).setScrollFactor(0).setDepth(2001);
+
+        // Stats
+        const finalHeight = this.recordHeight / this.pixelsPerMeter;
+        const statsText = this.add.text(width / 2, height * 0.5,
+            `最高记录: ${finalHeight.toFixed(1)}m\n生命值: 0`, {
+            fontSize: '32px',
+            fontFamily: 'Arial',
+            color: '#ffffff',
+            align: 'center',
+            lineSpacing: 10
+        }).setOrigin(0.5).setScrollFactor(0).setDepth(2001);
+
+        // Restart button
+        const restartButton = this.add.text(width / 2, height * 0.7, '[ 重新开始 ]', {
+            fontSize: '48px',
+            fontFamily: 'Arial',
+            fontStyle: 'bold',
+            color: '#00ff00',
+            stroke: '#000000',
+            strokeThickness: 6
+        }).setOrigin(0.5).setScrollFactor(0).setDepth(2001).setInteractive({ useHandCursor: true });
+
+        // Hover effect
+        restartButton.on('pointerover', () => {
+            restartButton.setScale(1.1);
+            restartButton.setColor('#ffffff');
+        });
+        restartButton.on('pointerout', () => {
+            restartButton.setScale(1.0);
+            restartButton.setColor('#00ff00');
+        });
+
+        // Click to restart
+        restartButton.on('pointerdown', () => {
+            this.scene.restart();
+        });
+
+        // Also allow space to restart
+        this.input.keyboard?.once('keydown-SPACE', () => {
+            this.scene.restart();
+        });
+
+        // Store in container
+        this.gameOverOverlay = this.add.container(0, 0, [overlay, gameOverText, statsText, restartButton]);
+        this.gameOverOverlay.setDepth(2000);
     }
 }

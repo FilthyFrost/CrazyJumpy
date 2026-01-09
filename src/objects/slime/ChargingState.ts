@@ -255,7 +255,11 @@ export class ChargingState implements ISlimeState {
             slime.y = groundYi + slime.currentCompression;
 
             // Strict Fatigue Exit (FAILURE - reset combo)
+            // Check for death from missed bounce timing (holdLockout above 100m)
             if (slime.currentCompression <= settleEps) {
+                if (this.checkMissedBounceDeath(slime)) {
+                    return; // Death occurred, already transitioned
+                }
                 slime.perfectStreak = 0;  // Reset combo on failure
                 slime.transitionTo('GROUNDED_IDLE');
             }
@@ -281,6 +285,33 @@ export class ChargingState implements ISlimeState {
         // We'll let Slime logic handles visual tau updates or do it here?
         // Original code set groundRecoverTau in enterIdle or launch.
         // We will replicate that.
+    }
+
+    /**
+     * Check if player should die due to missed bounce timing (holdLockout above 100m).
+     * If death occurs, calls health manager and transitions to GROUNDED_IDLE.
+     * Returns true if death occurred, false otherwise.
+     */
+    private checkMissedBounceDeath(slime: Slime): boolean {
+        if (!slime.holdLockout) {
+            return false;
+        }
+
+        // Check if landing was from above 100m (safe zone)
+        const PIXELS_PER_METER = GameConfig.display.pixelsPerMeter ?? 50;
+        const SAFE_ZONE_METERS = 100;
+        const heightMeters = slime.landingApexHeight / PIXELS_PER_METER;
+
+        if (heightMeters > SAFE_ZONE_METERS) {
+            // Report to health manager - this will set isDead = true
+            slime.healthManager.onLanding(slime.landingApexHeight, 'FAILED', true);
+            slime.showFeedback('FAILED');
+            slime.perfectStreak = 0;
+            slime.transitionTo('GROUNDED_IDLE');
+            return true;
+        }
+
+        return false;
     }
 
     // ----------------------------------------
@@ -361,6 +392,17 @@ export class ChargingState implements ISlimeState {
             slime.perfectStreak++;
         } else {
             slime.perfectStreak = 0; // Reset streak on non-perfect
+        }
+
+        // ===== HEALTH SYSTEM: Report landing to health manager =====
+        slime.healthManager.onLanding(slime.lastApexHeight, rating, slime.holdLockout);
+
+        // Check if slime died from this landing
+        if (slime.healthManager.isDead) {
+            // Don't launch - slime is dead
+            // Reset to idle state (death will be handled by GameScene)
+            slime.transitionTo('GROUNDED_IDLE');
+            return;
         }
 
         // ===== STREAK MULTIPLIER: 3+ consecutive perfects = 2x force =====

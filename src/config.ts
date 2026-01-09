@@ -193,6 +193,13 @@ export const GameConfig = {
         playerSize: 200,               // 角色显示大小 (像素) - 增大以便手机上看清
         playerCollisionRadius: 100,    // 角色碰撞半径 (像素) - 应匹配实际可见区域
         playerYOffset: 80,           // 角色Y偏移量 (负值=向上, 正值=向下) - 修正视觉中心点
+        corpseYOffset: 80,           // 尸体Y偏移量 (正值=向下) - 死亡动画时调整位置
         zoom: 0.85,                   // 默认相机缩放 (1.0 = 正常, 0.85 = 视野更广)
+        skyGradientHeightOffset: 200,  // 背景颜色抽取高度偏移 (米) - 正值=颜色偏高, 调整初始色调
+
+        // 血量条设置
+        healthBarWidth: 84,           // 血量条宽度 (像素)
+        healthBarHeight: 12,          // 血量条高度 (像素)
+        healthBarOffsetY: -60,        // 血量条Y偏移 (负值=在角色上方)
     },
 };

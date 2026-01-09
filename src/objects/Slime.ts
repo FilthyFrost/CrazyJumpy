@@ -4,6 +4,7 @@ import { IdleState } from './slime/IdleState';
 import { AirborneState } from './slime/AirborneState';
 import { ChargingState } from './slime/ChargingState';
 import type { ISlimeState } from './slime/ISlimeState';
+import { SlimeHealthManager } from './SlimeHealthManager';
 
 export type SlimeState = 'GROUNDED_IDLE' | 'AIRBORNE' | 'GROUND_CHARGING';
 
@@ -92,6 +93,12 @@ export default class Slime {
     public visualShakeX: number = 0;
     public visualShakeY: number = 0;
 
+    // Health System
+    public healthManager!: SlimeHealthManager;
+
+    // Animation state tracking
+    private currentAnimation: string = '';
+
     constructor(scene: Phaser.Scene, x: number, y: number, ground: Ground) {
         this.scene = scene;
         this.x = x;
@@ -105,8 +112,8 @@ export default class Slime {
             .setDisplaySize(playerSize, playerSize)
             .setDepth(10);
 
-        // Play jump animation immediately
-        this.graphics.play('jump');
+        // Play idle animation initially (starts on ground)
+        this.playAnimation('idle');
 
         // Initial velocity (don't override y position - use the passed in value)
         // Initial velocity (don't override y position - use the passed in value)
@@ -153,6 +160,9 @@ export default class Slime {
 
         const gcfg = GameConfig.ground as any;
         this.groundRecoverTau = (gcfg.releaseRecoverTime ?? 0.12) as number;
+
+        // Initialize Health Manager
+        this.healthManager = new SlimeHealthManager(scene);
 
         // Initialize States
         this.states = {
@@ -254,6 +264,10 @@ export default class Slime {
 
         this.updateGroundDeform(dt);
         this.updateVisuals();
+        this.updateAnimation();
+
+        // Update health manager
+        this.healthManager.update(dt, this.x, this.y);
     }
 
     public showFeedback(rating: 'PERFECT' | 'NORMAL' | 'FAILED') {
@@ -419,5 +433,73 @@ export default class Slime {
         const comboSize = Math.min(40, Math.floor(safeWidth * 0.08));
         this.comboText.setFontSize(comboSize);
         this.comboText.setStroke('#000000', Math.max(3, comboSize * 0.1));
+
+        // Health Manager UI scaling
+        this.healthManager.applyUIScale(safeWidth);
+    }
+
+    /**
+     * Play death animation once, then call onComplete callback
+     */
+    public playDeathAnimation(onComplete: () => void): void {
+        // Stop any current animation
+        this.graphics.stop();
+        this.currentAnimation = 'die';
+
+        // Reset visual state for death animation
+        this.graphics.clearTint();
+        const playerSize = GameConfig.display.playerSize;
+        this.graphics.setScale(playerSize / 32);  // Reset to base scale
+
+        // Play death animation once
+        this.graphics.play('die');
+
+        // Listen for animation complete
+        this.graphics.once('animationcomplete', () => {
+            onComplete();
+        });
+
+        // Hide spark particles
+        this.sparkEmitter.stop();
+
+        // Hide combo and feedback text
+        this.comboText.setAlpha(0);
+        this.feedbackText.setAlpha(0);
+    }
+
+    /**
+     * Play animation only if it's different from current
+     * Avoids redundant play() calls that would reset the animation
+     */
+    private playAnimation(key: string): void {
+        if (this.currentAnimation !== key) {
+            this.currentAnimation = key;
+            this.graphics.play(key);
+        }
+    }
+
+    /**
+     * Update the character animation based on current game state
+     */
+    public updateAnimation(): void {
+        // Don't change animation if dead
+        if (this.healthManager.isDead) return;
+
+        if (this.state === 'GROUNDED_IDLE') {
+            // On ground, no input - play idle animation
+            this.playAnimation('idle');
+        } else if (this.state === 'AIRBORNE') {
+            // In the air - check velocity direction
+            if (this.vy < 0) {
+                // Going up - play rise animation
+                this.playAnimation('jump_rise');
+            } else {
+                // Going down - play fall animation
+                this.playAnimation('jump_fall');
+            }
+        } else if (this.state === 'GROUND_CHARGING') {
+            // On ground, charging/compressing - hold land frame
+            this.playAnimation('jump_land');
+        }
     }
 }

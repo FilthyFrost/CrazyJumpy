@@ -9,10 +9,12 @@ const config: Phaser.Types.Core.GameConfig = {
   parent: 'app',
   backgroundColor: '#87CEEB',  // Sky blue background
 
-  // RESIZE mode for true full-screen (no white bars)
+  // Fixed portrait dimensions for mobile (540x960)
   scale: {
-    mode: Phaser.Scale.RESIZE,  // Dynamically resize to fill entire viewport
+    mode: Phaser.Scale.FIT,  // Fit to viewport while maintaining aspect ratio
     autoCenter: Phaser.Scale.CENTER_BOTH,
+    width: 540,
+    height: 960,
   },
 
   pixelArt: true,
