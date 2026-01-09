@@ -379,6 +379,22 @@ export class ChargingState implements ISlimeState {
             rating = 'NORMAL';
         }
 
+        // ===== ANTI-EXPLOIT: No fast-fall = no PERFECT above safe zone =====
+        // Player must actually participate in fast-fall to get PERFECT rating
+        const PIXELS_PER_METER = GameConfig.display.pixelsPerMeter ?? 50;
+        const SAFE_ZONE_PX = 100 * PIXELS_PER_METER;
+        const fallDist = Math.max(1, slime.landingFallDistance);
+        const fastDist = slime.landingFastFallDistance || 0;
+        const fastFallRatio = fastDist / fallDist;
+
+        // If above 100m and didn't fast-fall at least 30% of distance, downgrade PERFECT
+        if (slime.landingApexHeight > SAFE_ZONE_PX && fastFallRatio < 0.3 && rating === 'PERFECT') {
+            rating = 'NORMAL'; // Must participate to get PERFECT
+            if (GameConfig.debug) {
+                console.log(`[ANTI-EXPLOIT] Downgraded PERFECT to NORMAL: fastFallRatio=${fastFallRatio.toFixed(2)}`);
+            }
+        }
+
         // ===== EXPONENTIAL GROWTH based on rating =====
         const g = GameConfig.gravity;
 
