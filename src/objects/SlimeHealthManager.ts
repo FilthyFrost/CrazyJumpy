@@ -139,7 +139,10 @@ export class SlimeHealthManager {
     /**
      * Apply damage to the slime
      */
-    private takeDamage(damage: number): void {
+    /**
+     * Apply damage to the slime
+     */
+    public takeDamage(damage: number): void {
         if (this.isDead || damage <= 0) return;
 
         this.currentHealth = Math.max(0, this.currentHealth - damage);

@@ -9,6 +9,7 @@ import { SlimeHealthManager } from './SlimeHealthManager';
 export type SlimeState = 'GROUNDED_IDLE' | 'AIRBORNE' | 'GROUND_CHARGING';
 
 import Ground from './Ground';
+import GameScene from '../scenes/GameScene';
 
 export default class Slime {
     public graphics: Phaser.GameObjects.Sprite;
@@ -77,6 +78,20 @@ export default class Slime {
     public perfectStreak: number = 0;        // Consecutive perfect count
     public comboText!: Phaser.GameObjects.Text;
     public comboTimer: number = 0;
+
+    // Auto Bullet Time at Apex (for PERFECT bounces > 50m)
+    public predictedApexHeight: number = 0;     // Predicted apex height in pixels (calculated at launch)
+    public launchY: number = 0;                 // Y position at launch (for calculating progress)
+    public autoBTEligible: boolean = false;     // Whether this ascent qualifies for auto bullet time
+    public autoBTActivated: boolean = false;    // Whether auto bullet time has been triggered this ascent
+
+    // Charge Effect Animation
+    public chargeEffectSprite!: Phaser.GameObjects.Sprite;
+    public chargeEffectFrame: number = 0;          // Current frame (1-11)
+    public chargeEffectState: 'idle' | 'charging' | 'holding' | 'releasing' = 'idle';
+    public chargeEffectTimer: number = 0;          // Animation timer
+    private readonly CHARGE_FRAME_DURATION = 0.05; // Time per frame during charge (faster)
+    private readonly RELEASE_FRAME_DURATION = 0.04; // Time per frame during release
 
     private states: Record<SlimeState, ISlimeState>;
     private currentState: ISlimeState;
@@ -162,6 +177,13 @@ export default class Slime {
             emitting: false
         }).setDepth(15);
 
+        // Charge effect sprite (overlays player during charging)
+        this.chargeEffectSprite = scene.add.sprite(x, y, 'charge_1');
+        this.chargeEffectSprite.setOrigin(0.5, 0.5);
+        this.chargeEffectSprite.setDepth(101); // Above player
+        this.chargeEffectSprite.setScale(3); // Scale up the 20x16 sprite
+        this.chargeEffectSprite.setVisible(false);
+
         // Initial velocity (don't override y position - use the passed in value)
         this.vy = 0;
         this.prevVyForApex = this.vy;
@@ -215,7 +237,8 @@ export default class Slime {
         }
 
         // ===== UPDATE TEXT POSITIONS TO FOLLOW SLIME =====
-        // Combo text below slime (if visible)
+        // Layout order: Player → Combo → Height → BT Icon
+        // Combo text directly below slime (if visible)
         if (this.comboTimer > 0) {
             this.comboText.setPosition(this.x, this.y + 50);
             this.comboTimer -= dt;
@@ -256,20 +279,16 @@ export default class Slime {
             }
         }
 
-        // ===== YELLOW SPARK PARTICLES FOR PERFECT TIMING =====
-        // Update particle emitter position to follow slime
-        this.sparkEmitter.setPosition(this.x, this.y);
+        // ===== YELLOW SPARK PARTICLES (DISABLED per user request) =====
+        // this.sparkEmitter.setPosition(this.x, this.y);
+        // if (this.isInYellowZone && this.state === 'GROUND_CHARGING') {
+        //     if (!this.sparkEmitter.emitting) { this.sparkEmitter.start(); }
+        // } else {
+        //     if (this.sparkEmitter.emitting) { this.sparkEmitter.stop(); }
+        // }
 
-        // Emit sparks when in yellow zone (perfect timing window)
-        if (this.isInYellowZone && this.state === 'GROUND_CHARGING') {
-            if (!this.sparkEmitter.emitting) {
-                this.sparkEmitter.start();
-            }
-        } else {
-            if (this.sparkEmitter.emitting) {
-                this.sparkEmitter.stop();
-            }
-        }
+        // ===== CHARGE EFFECT ANIMATION =====
+        this.updateChargeEffect(dt);
 
         this.updateGroundDeform(dt);
         this.updateVisuals();
@@ -288,13 +307,34 @@ export default class Slime {
 
         if (rating === 'PERFECT') {
             this.feedbackText.setText('PERFECT!');
-            this.feedbackText.setColor('#00ff00');
+            // User request: Change color to Yellow (like before)
+            this.feedbackText.setColor('#ffff00');
+
+            // CHARGE BULLET TIME ENERGY
+            // Energy = Clamp(holdTime, 0, 5.0)
+            // Use this.holdTime (which tracks hold duration active during fall)
+            if (this.scene instanceof GameScene) {
+                const chargeAmount = Phaser.Math.Clamp(this.holdTime, 0, 5.0);
+                // Access manager via public property (we just added it)
+                (this.scene as any).bulletTimeManager?.addEnergy(chargeAmount);
+            }
+
+            // Complete charge effect animation (play remaining frames)
+            this.completeChargeEffect();
+
         } else if (rating === 'NORMAL') {
             this.feedbackText.setText('Normal');
             this.feedbackText.setColor('#ffff00');
+
+            // Complete charge effect animation (play remaining frames)
+            this.completeChargeEffect();
+
         } else {
             this.feedbackText.setText('FAILED');
             this.feedbackText.setColor('#ff0000');
+
+            // Cancel charge effect animation (hide immediately)
+            this.cancelChargeEffect();
         }
 
         // Show Combo Text if streak > 1 and Perfect
@@ -657,4 +697,90 @@ export default class Slime {
             this.currentAnimation = '';
         });
     }
+
+    // ===== CHARGE EFFECT ANIMATION SYSTEM =====
+
+    /**
+     * Start the charge effect animation (called when landing)
+     */
+    public startChargeEffect(): void {
+        this.chargeEffectState = 'charging';
+        this.chargeEffectFrame = 1;
+        this.chargeEffectTimer = 0;
+        this.chargeEffectSprite.setTexture('charge_1');
+        this.chargeEffectSprite.setVisible(true);
+    }
+
+    /**
+     * Complete the charge effect (play remaining frames after release)
+     */
+    public completeChargeEffect(): void {
+        if (this.chargeEffectState === 'holding') {
+            this.chargeEffectState = 'releasing';
+            this.chargeEffectTimer = 0;
+        }
+    }
+
+    /**
+     * Cancel the charge effect (hide immediately - for FAILED)
+     */
+    public cancelChargeEffect(): void {
+        this.chargeEffectState = 'idle';
+        this.chargeEffectSprite.setVisible(false);
+    }
+
+    /**
+     * Update charge effect animation each frame
+     */
+    private updateChargeEffect(dt: number): void {
+        // Position sprite on player's VISUAL position (graphics.y accounts for compression/sinking)
+        // This is a standard game dev practice: effects follow render position, not physics position
+        this.chargeEffectSprite.setPosition(this.graphics.x, this.graphics.y);
+
+        switch (this.chargeEffectState) {
+            case 'idle':
+                // Do nothing
+                break;
+
+            case 'charging':
+                // Advance frames 1-9 during charge phase
+                this.chargeEffectTimer += dt;
+                if (this.chargeEffectTimer >= this.CHARGE_FRAME_DURATION) {
+                    this.chargeEffectTimer = 0;
+                    if (this.chargeEffectFrame < 9) {
+                        this.chargeEffectFrame++;
+                        this.chargeEffectSprite.setTexture(`charge_${this.chargeEffectFrame}`);
+                    } else {
+                        // Reached frame 9, transition to holding
+                        this.chargeEffectState = 'holding';
+                    }
+                }
+                break;
+
+            case 'holding':
+                // Stay on frame 7 until release
+                // If player leaves charging state without proper release, cancel
+                if (this.state !== 'GROUND_CHARGING') {
+                    this.cancelChargeEffect();
+                }
+                break;
+
+            case 'releasing':
+                // Play remaining frames 10-14
+                this.chargeEffectTimer += dt;
+                if (this.chargeEffectTimer >= this.RELEASE_FRAME_DURATION) {
+                    this.chargeEffectTimer = 0;
+                    if (this.chargeEffectFrame < 14) {
+                        this.chargeEffectFrame++;
+                        this.chargeEffectSprite.setTexture(`charge_${this.chargeEffectFrame}`);
+                    } else {
+                        // Animation complete
+                        this.chargeEffectState = 'idle';
+                        this.chargeEffectSprite.setVisible(false);
+                    }
+                }
+                break;
+        }
+    }
 }
+

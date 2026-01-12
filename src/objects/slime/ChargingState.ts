@@ -15,6 +15,9 @@ export class ChargingState implements ISlimeState {
 
         slime.contactHasInput = false;
 
+        // Charge effect animation disabled per user request
+        // slime.startChargeEffect();
+
         // Check input immediately on enter (if player held space while landing)
         // We'll access the scene input or rely on the next update frame? 
         // Logic in old Slime.ts checked 'isSpaceDown' in update loop.
@@ -194,6 +197,9 @@ export class ChargingState implements ISlimeState {
                 slime.visualShakeY = 0;
             }
 
+            // ===== COLOR FEEDBACK FOR CHARGE TIMING =====
+            // Phase colors: Normal → Brightening → Golden (Yellow Zone) → Red (Overheld)
+            this.updateChargeTint(slime);
 
             // Early Release
             if (justReleased && slime.contactHasInput) {
@@ -203,7 +209,8 @@ export class ChargingState implements ISlimeState {
         }
 
         // Phase 2: At Peak
-
+        // Continue applying color feedback
+        this.updateChargeTint(slime);
 
         // Release
         if (justReleased && slime.contactHasInput) {
@@ -291,13 +298,13 @@ export class ChargingState implements ISlimeState {
         }
     }
 
-    exit(_slime: Slime): void {
-        // set recovery visual speed depending on how we exited
-        // If we launched, releaseRecoverTime is used (set in launchActiveControlled usually)
-        // If we settled, settleRecoverTime is used (set in enterIdle usually)
-        // We'll let Slime logic handles visual tau updates or do it here?
-        // Original code set groundRecoverTau in enterIdle or launch.
-        // We will replicate that.
+    exit(slime: Slime): void {
+        // Clear charge visual effects
+        slime.graphics.clearTint();
+        slime.chargeShake01 = 0;
+        slime.visualShakeX = 0;
+        slime.visualShakeY = 0;
+        slime.ground.setChargeTremor(0);
     }
 
     /**
@@ -555,6 +562,25 @@ export class ChargingState implements ISlimeState {
         slime.groundRecoverTau = (ground.releaseRecoverTime ?? 0.12) as number;
         slime.vy = -vLaunch;
 
+        // ===== AUTO BULLET TIME CALCULATION =====
+        // Physics: apex height = v^2 / (2g) where v = vLaunch
+        const gravity = GameConfig.gravity;
+        const predictedApexPx = (vLaunch * vLaunch) / (2 * gravity);
+        const pxPerM = GameConfig.display.pixelsPerMeter ?? 50;
+        const predictedApexMeters = predictedApexPx / pxPerM;
+
+        // Store launch position and predicted apex
+        slime.launchY = slime.getGroundY();
+        slime.predictedApexHeight = predictedApexPx;
+        slime.autoBTActivated = false;
+
+        // Eligibility: PERFECT judgment AND predicted apex > 50 meters
+        slime.autoBTEligible = (rating === 'PERFECT') && (predictedApexMeters > 50);
+
+        if (GameConfig.debug && slime.autoBTEligible) {
+            console.log(`[AutoBT] Eligible! Predicted apex: ${Math.round(predictedApexMeters)}m`);
+        }
+
         slime.transitionTo('AIRBORNE');
         slime.currentCompression = 0;
         slime.y = slime.getGroundY() - 0.5;
@@ -564,5 +590,44 @@ export class ChargingState implements ISlimeState {
         slime.holdLockout = false;
         slime.isInYellowZone = false;
         slime.prevVyForApex = slime.vy;
+    }
+
+    /**
+     * Update player sprite tint based on charge phase for visual feedback
+     * - Charging: Gradual brightening (white tint)
+     * - Yellow Zone: Golden glow (pulsing)
+     * - Overheld (holdLockout): Red warning
+     */
+    private updateChargeTint(slime: Slime): void {
+        const proximity = slime.chargeProximity ?? 0;
+
+        if (slime.holdLockout) {
+            // FAILED: Red warning tint
+            slime.graphics.setTint(0xff4444);
+        } else if (slime.isInYellowZone || slime.reachedPeak) {
+            // PERFECT WINDOW: Pulsing golden/green tint
+            // Use time for pulsing effect
+            const time = Date.now() / 1000;
+            const pulse = 0.5 + 0.5 * Math.sin(time * 12); // Fast pulse
+
+            // Interpolate between gold (0xffff00) and green (0x00ff00)
+            const r = Math.floor(255 * (1 - pulse * 0.3));
+            const g = 255;
+            const b = Math.floor(pulse * 100);
+            const color = (r << 16) | (g << 8) | b;
+            slime.graphics.setTint(color);
+        } else if (proximity > 0.3) {
+            // CHARGING: Gradual white brightening based on proximity
+            // From normal (0xffffff at 0.3) to bright (0xccffcc at 0.9)
+            const t = (proximity - 0.3) / 0.6; // 0 to 1
+            const brightness = Math.floor(255 - t * 50); // 255 → 205
+            const green = 255;
+            const blueRed = brightness;
+            const color = (blueRed << 16) | (green << 8) | blueRed;
+            slime.graphics.setTint(color);
+        } else {
+            // Normal: No tint
+            slime.graphics.clearTint();
+        }
     }
 }

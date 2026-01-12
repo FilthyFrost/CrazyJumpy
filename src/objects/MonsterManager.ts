@@ -7,6 +7,7 @@
 import Phaser from 'phaser';
 import { Monster, type MonsterType } from './Monster';
 import { GameConfig } from '../config';
+import GameScene from '../scenes/GameScene';
 
 export class MonsterManager {
     private scene: Phaser.Scene;
@@ -76,7 +77,7 @@ export class MonsterManager {
     }
 
     /**
-     * 更新所有怪物
+     * Update all monsters
      */
     public update(dt: number): void {
         const currentTime = this.scene.time.now;
@@ -85,6 +86,33 @@ export class MonsterManager {
                 monster.update(dt, currentTime);
             }
         }
+    }
+
+    /**
+     * Check collision between player and ANY monster
+     * Returns true if collision occurred (and player should die)
+     * Respetcs "Ghost Mode" (ignore collision if ascending)
+     */
+    public checkPlayerCollision(playerX: number, playerY: number, playerRadius: number, isAscending: boolean): boolean {
+        // Ghost Mode: Player passes through monsters when ascending
+        if (isAscending) return false;
+
+        const monsterRadius = GameConfig.monster.a01.size / 1.2;
+        const collisionThresholdSq = (playerRadius + monsterRadius) * (playerRadius + monsterRadius);
+
+        for (const monster of this.monsters) {
+            if (!monster.isAlive) continue;
+
+            const dx = monster.x - playerX;
+            const dy = monster.y - playerY;
+            const distSq = dx * dx + dy * dy;
+
+            if (distSq < collisionThresholdSq) {
+                return true; // Collision detected
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -99,17 +127,26 @@ export class MonsterManager {
 
         // 扇形范围参数
         const hitRangeYMeters = 2;   // Y轴容差：±2米
-        const hitRangeXPixels = 120;  // X轴攻击范围：120像素
+        const hitRangeXPixels = 150;  // X轴攻击范围：120像素
         const hitRangeYPixels = hitRangeYMeters * this.pixelsPerMeter;
 
         for (const monster of this.monsters) {
             if (!monster.isAlive) continue;
 
             // 检查怪物是否在滑动方向上且在X范围内
+            // 改进：增加 "背身容错" (Backwards Tolerance)。
+            // 在知名动作游戏中，攻击判定通常会向身后延伸一小段距离，
+            // 确保与玩家重叠或刚好贴在背后的怪物也能被击中，提供更好的打击手感。
+
             const xDistance = monster.x - playerX;
+            const backTolerance = 30; // 30px 容错距离
+
+            // 判定逻辑：
+            // 左滑 (-1): 距离应该在 [-Range, +Tolerance] 之间
+            // 右滑 (+1): 距离应该在 [-Tolerance, +Range] 之间
             const isInDirection = swipeDirection === -1
-                ? xDistance < 0 && xDistance > -hitRangeXPixels
-                : xDistance > 0 && xDistance < hitRangeXPixels;
+                ? (xDistance > -hitRangeXPixels && xDistance < backTolerance)
+                : (xDistance > -backTolerance && xDistance < hitRangeXPixels);
 
             if (!isInDirection) continue;
 
@@ -118,6 +155,11 @@ export class MonsterManager {
             if (yDistance < hitRangeYPixels) {
                 monster.kill();
                 killCount++;
+
+                // Trigger Bullet Time Refund (if active)
+                if (this.scene instanceof GameScene) {
+                    (this.scene as any).bulletTimeManager?.onKill();
+                }
             }
         }
 
@@ -125,19 +167,22 @@ export class MonsterManager {
     }
 
     /**
-     * 里程碑线以上的怪物重新刷新 (落地时调用)
-     * @param milestoneY 里程碑线的世界Y坐标
+     * Clear monsters BELOW the milestone line (keeping higher/harder ones)
+     * @param milestoneY World Y coordinate of the milestone (smaller Y = higher)
      */
     public respawnAboveMilestone(milestoneY: number): void {
-        // 移除里程碑线以上的怪物 (Y坐标更小 = 更高)
-        const aboveMilestone = this.monsters.filter(m => m.y < milestoneY);
-        for (const monster of aboveMilestone) {
+        // Remove monsters BELOW the milestone (Y > milestoneY means lower in world space)
+        // We want to KEEP monsters ABOVE (Y < milestoneY)
+        const belowMilestone = this.monsters.filter(m => m.y > milestoneY);
+        for (const monster of belowMilestone) {
             monster.destroy();
         }
 
-        // 保留里程碑线以下的怪物
-        this.monsters = this.monsters.filter(m => m.y >= milestoneY);
+        // Keep monsters ABOVE the milestone line
+        this.monsters = this.monsters.filter(m => m.y <= milestoneY);
 
+        // Optionally: Spawn new monsters above if sparse? 
+        // For now, just clearing old ones is enough as per requirement.
         // 计算里程碑高度 (米)
         const milestoneHeightM = (this.groundY - milestoneY) / this.pixelsPerMeter;
 

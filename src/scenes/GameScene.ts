@@ -6,6 +6,8 @@ import { CameraShakeRig } from './CameraShakeRig';
 import SkyGradientLUT from '../objects/SkyGradientLUT';
 import { GestureManager } from '../input/GestureManager';
 import { MonsterManager } from '../objects/MonsterManager';
+import { BulletTimeManager } from '../managers/BulletTimeManager';
+import { BulletTimeUI } from '../ui/BulletTimeUI';
 
 export default class GameScene extends Phaser.Scene {
     private slime!: Slime;
@@ -54,8 +56,15 @@ export default class GameScene extends Phaser.Scene {
     private isGameOver: boolean = false;
     private isPlayingDeathAnimation: boolean = false;
 
+    // Screen edge vignette for charge timing feedback
+    private chargeVignetteGraphics!: Phaser.GameObjects.Graphics;
+
     // Monster System (怪物系统)
     private monsterManager!: MonsterManager;
+
+    // Bullet Time System
+    private bulletTimeManager!: BulletTimeManager;
+    private bulletTimeUI!: BulletTimeUI;
 
     constructor() {
         super('GameScene');
@@ -118,12 +127,15 @@ export default class GameScene extends Phaser.Scene {
             this.load.image(`monster_a01_left_${i}`, `assets/Monsters/Monster A01/left_frame_${i}.png`);
             this.load.image(`monster_a01_right_${i}`, `assets/Monsters/Monster A01/right_frame_${i}.png`);
         }
-        // Create spark texture dynamically
-        const sparkGraphics = this.make.graphics({ x: 0, y: 0 });
-        sparkGraphics.fillStyle(0xffff00, 1);
-        sparkGraphics.fillCircle(8, 8, 8);
-        sparkGraphics.generateTexture('spark', 16, 16);
-        sparkGraphics.destroy();
+
+        // Load Bullet Time icon
+        this.load.image('bt_icon', 'assets/ui/bt_icon.png');
+
+        // Load Charge Effect frames (14 frames)
+        for (let i = 1; i <= 14; i++) {
+            const frameNum = String(i).padStart(2, '0');
+            this.load.image(`charge_${i}`, `assets/effects/charge/Bubble_frame_${frameNum}.png`);
+        }
     }
 
     create() {
@@ -140,8 +152,38 @@ export default class GameScene extends Phaser.Scene {
         this.accumulator = 0;
         this.isCameraTransitioning = false;
 
-        // Crisp rendering
-        this.cameras.main.roundPixels = true;
+        // Initialize Bullet Time System
+        // Fix: Do not reset BEFORE creation on restart (logic error). 
+        // Always create new manager instance, then call reset to apply initial test energy.
+        this.bulletTimeManager = new BulletTimeManager(this);
+        this.bulletTimeManager.reset(); // Sets initial energy to 2.0s
+
+        this.bulletTimeUI = new BulletTimeUI(this, this.bulletTimeManager);
+
+        // Hide UI elements until game starts (start screen is showing)
+        this.bulletTimeUI.setVisible(false);
+
+        // Events for Bullet Time (Sound/Visuals)
+        this.events.on('bullet-time-start', () => {
+            // TODO: Add sound/shader effects
+            console.log('[GameScene] Bullet Time START');
+        });
+        this.events.on('bullet-time-end', () => {
+            // TODO: Remove effects
+            console.log('[GameScene] Bullet Time END');
+        });
+        this.events.on('bullet-time-button-click', () => {
+            const heightM = (this.ground.y - this.slime.y) / this.pixelsPerMeter;
+            const isAscending = this.slime.vy < 0; // Negative vy is up
+            this.bulletTimeManager.activate(heightM, isAscending);
+        });
+
+        // Keyboard 'E' for Bullet Time (Desktop testing)
+        this.input.keyboard?.on('keydown-E', () => {
+            const heightM = (this.ground.y - this.slime.y) / this.pixelsPerMeter;
+            const isAscending = this.slime.vy < 0;
+            this.bulletTimeManager.activate(heightM, isAscending);
+        });
 
         // ===== HEIGHT-DRIVEN GRADIENT BACKGROUND =====
         // Initialize gradient LUT system (replaces static background images)
@@ -381,17 +423,24 @@ export default class GameScene extends Phaser.Scene {
             this.gestureManager.clearAll();
         });
 
-        // Meter HUD - adjusted position for mobile
-        // Dynamic font size: 10% of screen width, max 64px
-        const heightFontSize = Math.min(64, Math.floor(width * 0.1));
-        this.heightText = this.add.text(width / 2, height * 0.9, '0m', {
+        // Meter HUD - adjusted position for mobile (using config)
+        const heightFontSize = Math.min(
+            GameConfig.ui.heightText.maxFontSize,
+            Math.floor(width * GameConfig.ui.heightText.fontSizePercent)
+        );
+        // Initial position: will be updated in update() to follow player
+        // Use groundY as initial reference since slime starts at ground level
+        const initialGroundY = height * 0.8;
+        const initialHeightY = initialGroundY + GameConfig.ui.heightText.yOffset;
+        this.heightText = this.add.text(width / 2, initialHeightY, '0m', {
             fontSize: `${heightFontSize}px`,
+            fontFamily: 'Arial',
             color: '#ffffff',
             align: 'center',
             fontStyle: 'bold',
             stroke: '#000000',
-            strokeThickness: Math.max(4, heightFontSize * 0.1)
-        }).setOrigin(0.5, 1).setScrollFactor(0).setDepth(200);
+            strokeThickness: Math.max(3, heightFontSize * 0.1)
+        }).setOrigin(0.5, 0).setDepth(200).setVisible(false); // Hidden until game starts
 
         // Milestone Graphics (draws in world space)
         this.milestoneGraphics = this.add.graphics();
@@ -410,6 +459,11 @@ export default class GameScene extends Phaser.Scene {
 
         // Initialize Camera Shake Rig
         this.shakeRig = new CameraShakeRig();
+
+        // Create screen edge vignette overlay for charge feedback
+        this.chargeVignetteGraphics = this.add.graphics();
+        this.chargeVignetteGraphics.setScrollFactor(0); // Fixed to screen
+        this.chargeVignetteGraphics.setDepth(3000); // Above all game elements
 
         // Apply Zoom
         const zoom = GameConfig.display.zoom ?? 1.0;
@@ -457,13 +511,16 @@ export default class GameScene extends Phaser.Scene {
 
         // 2. HUD: Bottom of Safe Frame
         if (this.heightText) {
-            // Font size relative to SAFE width
-            const fs = Math.min(64, Math.floor(sf.width * 0.1));
+            // Font size relative to SAFE width (using config)
+            const fs = Math.min(
+                GameConfig.ui.heightText.maxFontSize,
+                Math.floor(sf.width * GameConfig.ui.heightText.fontSizePercent)
+            );
             this.heightText.setFontSize(fs);
             this.heightText.setStroke('#000000', Math.max(4, fs * 0.1));
 
-            // Position: Bottom of Safe Frame (minus padding)
-            this.heightText.setPosition(width / 2, sf.y + sf.height * 0.9);
+            // Position: Now handled in update() to follow player
+            // this.heightText.setPosition(width / 2, sf.y + sf.height * 0.9);
         }
 
         // 3. Start Screen: Relative to Safe Frame
@@ -579,6 +636,10 @@ export default class GameScene extends Phaser.Scene {
         this.gameStarted = true;
         this.startOverlay.destroy();
 
+        // Show UI elements that were hidden during start screen
+        this.heightText.setVisible(true);
+        this.bulletTimeUI.setVisible(true);
+
         // Reset input state to prevent start button click from causing immediate jump
         this.isSpaceDown = false;
         this.pointerDownCount = 0;
@@ -635,6 +696,20 @@ export default class GameScene extends Phaser.Scene {
         const deltaSeconds = delta / 1000;
         const clampedDelta = Math.min(deltaSeconds, this.MAX_FRAME_DT);
 
+        // Update Bullet Time Manager (Real Time)
+        // Convert y to height meters: ground.y (bottom) - slime.y (top)
+        const heightM = (this.ground.y - this.slime.y) / this.pixelsPerMeter;
+        const isAscending = this.slime.vy < 0;
+        this.bulletTimeManager.update(clampedDelta, heightM, isAscending);
+
+        // Update Bullet Time Manager logic (timers, auto-cancel)
+        // Note: Position update moved to end of frame to match physics position
+        this.bulletTimeManager.update(clampedDelta, heightM, isAscending);
+
+        // Apply Time Scale to Physics Step Accumulator
+        // FIX: Previously we multiplied accumulator by timeScale, which caused the physics loop 
+        // to run fewer times per second (low FPS).
+        // NOW: We accumulate real time (full FPS), but scale the DT passed to the physics engine.
         this.accumulator += clampedDelta;
 
         // ===== GESTURE PROCESSING =====
@@ -671,15 +746,24 @@ export default class GameScene extends Phaser.Scene {
         }
 
         let steps = 0;
+        // Get current time scale for this frame
+        const timeScale = this.bulletTimeManager.timeScale;
+
         while (this.accumulator >= this.FIXED_DT && steps < this.MAX_STEPS_PER_FRAME) {
-            // Run physics at fixed timestep
-            this.slime.update(this.FIXED_DT * 1000, isHoldActive);  // Slime expects ms
-            this.ground.render(this.FIXED_DT, this.slime.getCompression(), this.slime.x);
+            // Run physics at fixed timestep INTERVAL (e.g. 60 times/sec real time)
+            // BUT simulate scaled amount of time (e.g. 0.3 * 1/60 sec game time)
+            const simDt = this.FIXED_DT * timeScale;
+
+            this.slime.update(simDt * 1000, isHoldActive);  // Slime expects ms
+            this.ground.render(simDt, this.slime.getCompression(), this.slime.x);
 
             // Update monsters
-            this.monsterManager.update(this.FIXED_DT);
+            this.monsterManager.update(simDt);
 
-            this.accumulator -= this.FIXED_DT;
+            // Check Collision (Player vs Monster) - REMOVED per user request
+            // Monsters do not kill the player.
+
+            this.accumulator -= this.FIXED_DT; // Consume REAL time
             steps++;
         }
 
@@ -735,11 +819,13 @@ export default class GameScene extends Phaser.Scene {
             next = current + Phaser.Math.Clamp(desired - current, -maxStep, maxStep);
         }
 
-        // Pixel Snapping
-        next = Math.round(next);
-
         // Update Shake Rig
-        this.shakeRig.update(dt, this.slime.chargeShake01, this.slime.airShake01);
+        // User Request: Disable shake during bullet time for better visibility
+        const isBulletTime = this.bulletTimeManager.isActive;
+        const inputChargeShake = isBulletTime ? 0 : this.slime.chargeShake01;
+        const inputAirShake = isBulletTime ? 0 : this.slime.airShake01;
+
+        this.shakeRig.update(dt, inputChargeShake, inputAirShake);
 
         // Apply Final Camera Position (Base + Shake)
         this.cameras.main.scrollY = next + this.shakeRig.shakeY;
@@ -756,9 +842,20 @@ export default class GameScene extends Phaser.Scene {
 
         this.heightText.setText(`${heightMeters.toFixed(0)}m`);
 
+        // Make Height Text follow player (offset from config)
+        const heightYOffset = GameConfig.ui.heightText.yOffset;
+        this.heightText.setPosition(this.slime.x, this.slime.y + heightYOffset);
+
+        // Update Bullet Time UI (icon follows player below height text)
+        this.bulletTimeUI.updatePosition(this.slime.x, this.slime.y);
+        this.bulletTimeUI.update();
+
         // ===== UPDATE GRADIENT BACKGROUND =====
         // Update background color based on player height
         this.skyGradient.update(this.slime.y);
+
+        // Screen edge vignette disabled per user feedback
+        // this.updateChargeVignette();
 
         // ===== MILESTONE TRACKING (tracks HEAD height) =====
         const currentHead = this.slime.y - this.slime.radius;
@@ -789,7 +886,6 @@ export default class GameScene extends Phaser.Scene {
         // Always redraw to keep text at screen edge
         this.milestoneGraphics.clear();
 
-        // Apply configurable offset for manual fine-tuning
         const milestoneOffset = GameConfig.milestone?.yOffset ?? 0;
 
         // Line Y: where the HEAD was at record height
@@ -808,6 +904,17 @@ export default class GameScene extends Phaser.Scene {
 
         this.milestoneText.setText(`🏆 ${meters.toFixed(0)}m`);
         this.milestoneText.setPosition(textX, lineY - 25);
+    }
+
+    /**
+     * Called when player lands (from Slime state)
+     */
+    public onPlayerLanded() {
+        // User requested to REMOVE the monster clearing logic.
+        // Keeping the method for future hooks but removing the action.
+        // const milestoneOffset = GameConfig.milestone?.yOffset ?? 0;
+        // const recordY = this.ground.y - this.recordHeight + milestoneOffset;
+        // this.monsterManager.respawnAboveMilestone(recordY);
     }
 
     private showGameOver() {
@@ -875,5 +982,70 @@ export default class GameScene extends Phaser.Scene {
         // Store in container
         this.gameOverOverlay = this.add.container(0, 0, [overlay, gameOverText, statsText, restartButton]);
         this.gameOverOverlay.setDepth(2000);
+    }
+
+    /**
+     * Draw screen edge vignette for charge timing feedback
+     * - Gold/green glow when in Perfect window (yellowZone or reachedPeak)
+     * - Red glow when overheld (holdLockout)
+     */
+    private updateChargeVignette(): void {
+        this.chargeVignetteGraphics.clear();
+
+        // Only show during charging state
+        if (this.slime.state !== 'GROUND_CHARGING') {
+            return;
+        }
+
+        const { width, height } = this.scale;
+        const thickness = 40; // Edge thickness in pixels
+        let color: number;
+        let alpha: number;
+
+        if (this.slime.holdLockout) {
+            // FAILED: Red warning vignette
+            color = 0xff0000;
+            alpha = 0.4;
+        } else if (this.slime.isInYellowZone || this.slime.reachedPeak) {
+            // PERFECT WINDOW: Pulsing gold vignette
+            const time = Date.now() / 1000;
+            const pulse = 0.5 + 0.5 * Math.sin(time * 8); // Medium pulse
+            color = 0xffcc00; // Gold
+            alpha = 0.15 + pulse * 0.25; // 0.15 - 0.4 range
+        } else {
+            // Not in special zone yet
+            return;
+        }
+
+        // Draw semi-transparent edge rectangles
+        this.chargeVignetteGraphics.fillStyle(color, alpha);
+
+        // Top edge
+        this.chargeVignetteGraphics.fillRect(0, 0, width, thickness);
+
+        // Bottom edge
+        this.chargeVignetteGraphics.fillRect(0, height - thickness, width, thickness);
+
+        // Left edge
+        this.chargeVignetteGraphics.fillRect(0, 0, thickness, height);
+
+        // Right edge
+        this.chargeVignetteGraphics.fillRect(width - thickness, 0, thickness, height);
+
+        // Inner fade gradients (simulate vignette with multiple rectangles)
+        for (let i = 1; i <= 3; i++) {
+            const fadeAlpha = alpha * (1 - i * 0.25);
+            const innerOffset = thickness + i * 15;
+            this.chargeVignetteGraphics.fillStyle(color, fadeAlpha);
+
+            // Top inner
+            this.chargeVignetteGraphics.fillRect(0, thickness + (i - 1) * 15, width, 15);
+            // Bottom inner
+            this.chargeVignetteGraphics.fillRect(0, height - innerOffset, width, 15);
+            // Left inner
+            this.chargeVignetteGraphics.fillRect(thickness + (i - 1) * 15, 0, 15, height);
+            // Right inner
+            this.chargeVignetteGraphics.fillRect(width - innerOffset, 0, 15, height);
+        }
     }
 }

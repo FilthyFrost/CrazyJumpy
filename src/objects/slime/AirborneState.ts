@@ -97,6 +97,53 @@ export class AirborneState implements ISlimeState {
             slime.fastFallTime += dt;
         }
 
+        // ===== AUTO BULLET TIME AT APEX (from 85% to 98% of ascent) =====
+        // Check during ascent only (vy < 0 means going up)
+        if (slime.vy < 0 && slime.autoBTEligible) {
+            // Calculate current height progress toward predicted apex
+            const currentHeight = slime.launchY - slime.y;
+            const progress = currentHeight / Math.max(1, slime.predictedApexHeight);
+
+            // Activate bullet time when reaching 85% of apex
+            if (!slime.autoBTActivated && progress >= 0.85) {
+                slime.autoBTActivated = true;
+
+                // Access BulletTimeManager via scene and activate (force, no energy cost)
+                const scene = slime.scene as any;
+                if (scene.bulletTimeManager && !scene.bulletTimeManager.isActive) {
+                    scene.bulletTimeManager.forceActivate();
+                    if (GameConfig.debug) {
+                        console.log(`[AutoBT] Activated at ${Math.round(progress * 100)}% of apex!`);
+                    }
+                }
+            }
+
+            // Deactivate when reaching 98% of apex
+            if (slime.autoBTActivated && progress >= 0.98) {
+                const scene = slime.scene as any;
+                if (scene.bulletTimeManager && scene.bulletTimeManager.isActive) {
+                    scene.bulletTimeManager.deactivate();
+                    if (GameConfig.debug) {
+                        console.log(`[AutoBT] Deactivated at 98% - near apex`);
+                    }
+                }
+                slime.autoBTEligible = false; // Done for this ascent
+            }
+        }
+
+        // Also deactivate if falling starts while active
+        if (slime.vy > 0 && slime.autoBTActivated) {
+            const scene = slime.scene as any;
+            if (scene.bulletTimeManager && scene.bulletTimeManager.isActive) {
+                scene.bulletTimeManager.deactivate();
+                if (GameConfig.debug) {
+                    console.log(`[AutoBT] Deactivated - falling started`);
+                }
+            }
+            slime.autoBTActivated = false;
+            slime.autoBTEligible = false; // Reset for next bounce
+        }
+
         // 3) Apex Detection - reset fastFallEnergy at apex
         if (slime.prevVyForApex < 0 && slime.vy >= 0) {
             const groundYi = slime.getGroundY();
@@ -182,6 +229,11 @@ export class AirborneState implements ISlimeState {
                 intensity *= (0.8 + 0.2 * vGain);
 
                 slime.ground.onLandingImpact(slime.x, Phaser.Math.Clamp(intensity, 0, 1));
+            }
+
+            // Trigger Landing Event on Scene (e.g. for clearing monsters)
+            if ((slime.scene as any).onPlayerLanded) {
+                (slime.scene as any).onPlayerLanded();
             }
 
             // Transition
