@@ -7,8 +7,7 @@ import SkyGradientLUT from '../objects/SkyGradientLUT';
 import { GestureManager } from '../input/GestureManager';
 import { MonsterManager } from '../objects/MonsterManager';
 import { BulletTimeManager } from '../managers/BulletTimeManager';
-import { BulletTimeHourglass } from '../ui/BulletTimeHourglass';
-import { PickupManager } from '../objects/PickupManager';
+import { BulletTimeUI } from '../ui/BulletTimeUI';
 
 export default class GameScene extends Phaser.Scene {
     private slime!: Slime;
@@ -64,10 +63,7 @@ export default class GameScene extends Phaser.Scene {
 
     // Bullet Time System
     private bulletTimeManager!: BulletTimeManager;
-    private bulletTimeHourglass!: BulletTimeHourglass;
-
-    // Pickup System (掉落物品)
-    private pickupManager!: PickupManager;
+    private bulletTimeUI!: BulletTimeUI;
 
     constructor() {
         super('GameScene');
@@ -131,20 +127,6 @@ export default class GameScene extends Phaser.Scene {
             this.load.image(`monster_a01_right_${i}`, `assets/Monsters/Monster A01/right_frame_${i}.png`);
         }
 
-        // Load Monster A02 (Bat) animation frames (3 frames each direction)
-        for (let i = 1; i <= 3; i++) {
-            const frameNum = String(i).padStart(2, '0');
-            this.load.image(`monster_a02_left_${i}`, `assets/Monsters/Monster A02/BatD_left_frame_${frameNum}.png`);
-            this.load.image(`monster_a02_right_${i}`, `assets/Monsters/Monster A02/BatD_right_frame_${frameNum}.png`);
-        }
-
-        // Load Monster A03 (BatH/Elite) animation frames (3 frames each direction)
-        for (let i = 1; i <= 3; i++) {
-            const frameNum = String(i).padStart(2, '0');
-            this.load.image(`monster_a03_left_${i}`, `assets/Monsters/Monster A03/BatH_left_${frameNum}.png`);
-            this.load.image(`monster_a03_right_${i}`, `assets/Monsters/Monster A03/BatH_right_${frameNum}.png`);
-        }
-
         // Load Bullet Time icon
         this.load.image('bt_icon', 'assets/ui/bt_icon.png');
 
@@ -153,11 +135,6 @@ export default class GameScene extends Phaser.Scene {
             const frameNum = String(i).padStart(2, '0');
             this.load.image(`charge_${i}`, `assets/effects/charge/Bubble_frame_${frameNum}.png`);
         }
-
-        // Load Pickup items
-        this.load.image('pickup_coin', 'assets/Pickups/CoinsCopper0.png');   // 铜币
-        this.load.image('pickup_gem', 'assets/Pickups/A01_Wing.png');        // A01材料
-        this.load.image('pickup_wing', 'assets/Pickups/A02_Wing.png');       // A02翅膀材料
     }
 
     create() {
@@ -180,17 +157,32 @@ export default class GameScene extends Phaser.Scene {
         this.bulletTimeManager = new BulletTimeManager(this);
         this.bulletTimeManager.reset(); // Sets initial energy to 2.0s
 
-        // Initialize Bullet Time Hourglass UI
-        this.bulletTimeHourglass = new BulletTimeHourglass(this, this.bulletTimeManager);
+        this.bulletTimeUI = new BulletTimeUI(this, this.bulletTimeManager);
+
+        // Hide UI elements until game starts (start screen is showing)
+        this.bulletTimeUI.setVisible(false);
 
         // Events for Bullet Time (Sound/Visuals)
         this.events.on('bullet-time-start', () => {
-            // Sound/shader effects can be added here
+            // TODO: Add sound/shader effects
+            console.log('[GameScene] Bullet Time START');
         });
         this.events.on('bullet-time-end', () => {
-            // Remove effects here
+            // TODO: Remove effects
+            console.log('[GameScene] Bullet Time END');
         });
-        // Manual bullet time removed - now automatic on PERFECT bounce
+        this.events.on('bullet-time-button-click', () => {
+            const heightM = (this.ground.y - this.slime.y) / this.pixelsPerMeter;
+            const isAscending = this.slime.vy < 0; // Negative vy is up
+            this.bulletTimeManager.activate(heightM, isAscending);
+        });
+
+        // Keyboard 'E' for Bullet Time (Desktop testing)
+        this.input.keyboard?.on('keydown-E', () => {
+            const heightM = (this.ground.y - this.slime.y) / this.pixelsPerMeter;
+            const isAscending = this.slime.vy < 0;
+            this.bulletTimeManager.activate(heightM, isAscending);
+        });
 
         // ===== HEIGHT-DRIVEN GRADIENT BACKGROUND =====
         // Initialize gradient LUT system (replaces static background images)
@@ -349,68 +341,6 @@ export default class GameScene extends Phaser.Scene {
             repeat: -1
         });
 
-        // Monster A02 (Bat) - Left animation
-        this.anims.create({
-            key: 'monster_a02_left',
-            frames: [
-                { key: 'monster_a02_left_1' }, { key: 'monster_a02_left_2' }, { key: 'monster_a02_left_3' }
-            ],
-            frameRate: GameConfig.monster.a02.frameRate,
-            repeat: -1
-        });
-
-        // Monster A02 (Bat) - Right animation
-        this.anims.create({
-            key: 'monster_a02_right',
-            frames: [
-                { key: 'monster_a02_right_1' }, { key: 'monster_a02_right_2' }, { key: 'monster_a02_right_3' }
-            ],
-            frameRate: GameConfig.monster.a02.frameRate,
-            repeat: -1
-        });
-
-        // Monster A03 (BatH/Elite) - Left animation
-        // 使用可选链确保即使资源未加载也不会崩溃
-        if (this.textures.exists('monster_a03_left_1')) {
-            this.anims.create({
-                key: 'monster_a03_left',
-                frames: [
-                    { key: 'monster_a03_left_1' }, { key: 'monster_a03_left_2' }, { key: 'monster_a03_left_3' }
-                ],
-                frameRate: GameConfig.monster.a03?.frameRate ?? 8,
-                repeat: -1
-            });
-
-            this.anims.create({
-                key: 'monster_a03_right',
-                frames: [
-                    { key: 'monster_a03_right_1' }, { key: 'monster_a03_right_2' }, { key: 'monster_a03_right_3' }
-                ],
-                frameRate: GameConfig.monster.a03?.frameRate ?? 8,
-                repeat: -1
-            });
-        } else {
-            console.warn('[GameScene] A03 textures not found, using A01 as fallback');
-            // 创建回退动画，使用A01的纹理
-            this.anims.create({
-                key: 'monster_a03_left',
-                frames: [
-                    { key: 'monster_a01_left_1' }, { key: 'monster_a01_left_2' }, { key: 'monster_a01_left_3' }
-                ],
-                frameRate: 8,
-                repeat: -1
-            });
-
-            this.anims.create({
-                key: 'monster_a03_right',
-                frames: [
-                    { key: 'monster_a01_right_1' }, { key: 'monster_a01_right_2' }, { key: 'monster_a01_right_3' }
-                ],
-                frameRate: 8,
-                repeat: -1
-            });
-        }
-
         // 1. Create Ground
         this.ground = new Ground(this, groundY);
 
@@ -425,12 +355,8 @@ export default class GameScene extends Phaser.Scene {
         // 3. Initialize Gesture Manager for swipe/hold detection
         this.gestureManager = new GestureManager(width);
 
-        // 3b. Initialize Pickup Manager
-        this.pickupManager = new PickupManager(this);
-
-        // 3c. Initialize Monster Manager
+        // 3b. Initialize Monster Manager
         this.monsterManager = new MonsterManager(this, width, groundY, this.pixelsPerMeter);
-        this.monsterManager.setPickupManager(this.pickupManager);
         this.monsterManager.spawnInitialMonsters();
 
         // 4. Input - Keyboard (space = hold/fast-fall)
@@ -441,14 +367,16 @@ export default class GameScene extends Phaser.Scene {
         this.input.keyboard?.on('keydown-A', () => {
             if (this.slime.state === 'AIRBORNE' && !this.slime.laneSwitchLocked) {
                 this.slime.requestLaneChange(-1, (dir, x, y) => {
-                    this.monsterManager.checkSectorCollision(dir, x, y);
+                    const kills = this.monsterManager.checkSectorCollision(dir, x, y);
+                    if (kills > 0) console.log(`[GameScene] Killed ${kills} monsters!`);
                 });
             }
         });
         this.input.keyboard?.on('keydown-D', () => {
             if (this.slime.state === 'AIRBORNE' && !this.slime.laneSwitchLocked) {
                 this.slime.requestLaneChange(1, (dir, x, y) => {
-                    this.monsterManager.checkSectorCollision(dir, x, y);
+                    const kills = this.monsterManager.checkSectorCollision(dir, x, y);
+                    if (kills > 0) console.log(`[GameScene] Killed ${kills} monsters!`);
                 });
             }
         });
@@ -706,6 +634,7 @@ export default class GameScene extends Phaser.Scene {
 
         // Show UI elements that were hidden during start screen
         this.heightText.setVisible(true);
+        this.bulletTimeUI.setVisible(true);
 
         // Reset input state to prevent start button click from causing immediate jump
         this.isSpaceDown = false;
@@ -800,10 +729,15 @@ export default class GameScene extends Phaser.Scene {
         // Process lane switching (ascending + swipe detected)
         // Note: Swipe and Hold are mutually exclusive in GestureManager, so no need to check isHoldActive here
         if (this.slime.state === 'AIRBORNE' && this.slime.vy < 0 && gesture.swipeDirection !== 0) {
+            console.log(`[GameScene] Lane change: dir=${gesture.swipeDirection} vy=${this.slime.vy.toFixed(0)}`);
+
             const direction = gesture.swipeDirection as -1 | 1;
             // Trigger lane change with collision callback (fired on attack impact frame)
             this.slime.requestLaneChange(direction, (dir, x, y) => {
-                this.monsterManager.checkSectorCollision(dir, x, y);
+                const kills = this.monsterManager.checkSectorCollision(dir, x, y);
+                if (kills > 0) {
+                    console.log(`[GameScene] Killed ${kills} monsters!`);
+                }
             });
         }
 
@@ -821,10 +755,6 @@ export default class GameScene extends Phaser.Scene {
 
             // Update monsters
             this.monsterManager.update(simDt);
-
-            // Update pickups (chase player with dynamic speed)
-            const playerSpeed = Math.abs(this.slime.vy);
-            this.pickupManager.update(simDt, this.slime.x, this.slime.y, playerSpeed);
 
             // Check Collision (Player vs Monster) - REMOVED per user request
             // Monsters do not kill the player.
@@ -912,8 +842,9 @@ export default class GameScene extends Phaser.Scene {
         const heightYOffset = GameConfig.ui.heightText.yOffset;
         this.heightText.setPosition(this.slime.x, this.slime.y + heightYOffset);
 
-        // Update Bullet Time Hourglass UI
-        this.bulletTimeHourglass.update(this.slime.x, this.slime.y);
+        // Update Bullet Time UI (icon follows player below height text)
+        this.bulletTimeUI.updatePosition(this.slime.x, this.slime.y);
+        this.bulletTimeUI.update();
 
         // ===== UPDATE GRADIENT BACKGROUND =====
         // Update background color based on player height
@@ -973,11 +904,13 @@ export default class GameScene extends Phaser.Scene {
 
     /**
      * Called when player lands (from Slime state)
-     * 落地时清理所有怪物，实现"一跳一舞台"机制
      */
     public onPlayerLanded() {
-        // 落地清场：清理所有怪物，防止累积刷怪
-        this.monsterManager.onPlayerLanded();
+        // User requested to REMOVE the monster clearing logic.
+        // Keeping the method for future hooks but removing the action.
+        // const milestoneOffset = GameConfig.milestone?.yOffset ?? 0;
+        // const recordY = this.ground.y - this.recordHeight + milestoneOffset;
+        // this.monsterManager.respawnAboveMilestone(recordY);
     }
 
     private showGameOver() {

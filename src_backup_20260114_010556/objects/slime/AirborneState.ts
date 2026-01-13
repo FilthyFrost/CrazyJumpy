@@ -97,73 +97,47 @@ export class AirborneState implements ISlimeState {
             slime.fastFallTime += dt;
         }
 
-        // ===== AUTO BULLET TIME AT APEX (from 85% until condition met) =====
+        // ===== AUTO BULLET TIME AT APEX (from 85% to 98% of ascent) =====
         // Check during ascent only (vy < 0 means going up)
         if (slime.vy < 0 && slime.autoBTEligible) {
             // Calculate current height progress toward predicted apex
             const currentHeight = slime.launchY - slime.y;
             const progress = currentHeight / Math.max(1, slime.predictedApexHeight);
-            const currentHeightM = currentHeight / (GameConfig.display.pixelsPerMeter ?? 50);
 
-            // Activate bullet time when reaching 80% of apex
-            if (!slime.autoBTActivated && progress >= 0.80) {
+            // Activate bullet time when reaching 85% of apex
+            if (!slime.autoBTActivated && progress >= 0.85) {
                 slime.autoBTActivated = true;
-
-                // Calculate dynamic duration based on apex height
-                const apexHeightM = slime.predictedApexHeight / (GameConfig.display.pixelsPerMeter ?? 50);
 
                 // Access BulletTimeManager via scene and activate (force, no energy cost)
                 const scene = slime.scene as any;
                 if (scene.bulletTimeManager && !scene.bulletTimeManager.isActive) {
-                    scene.bulletTimeManager.forceActivateWithHeight(apexHeightM);
+                    scene.bulletTimeManager.forceActivate();
                     if (GameConfig.debug) {
-                        console.log(`[AutoBT] Activated at ${Math.round(progress * 100)}% | Height: ${apexHeightM.toFixed(0)}m`);
+                        console.log(`[AutoBT] Activated at ${Math.round(progress * 100)}% of apex!`);
                     }
                 }
             }
 
-            // ===== 智能子弹时间结束检测 =====
-            // 条件1: 砍完所有怪 → 立即结束
-            // 条件2: 超过最高怪物 → 立即结束（漏怪惩罚）
-            if (slime.autoBTActivated) {
+            // Deactivate when reaching 98% of apex
+            if (slime.autoBTActivated && progress >= 0.98) {
                 const scene = slime.scene as any;
-                if (scene.bulletTimeManager?.isActive && scene.monsterManager) {
-                    const aliveCount = scene.monsterManager.getAliveMonsterCount();
-                    const highestMonsterHeight = scene.monsterManager.getHighestAliveMonsterHeight();
-
-                    let shouldEnd = false;
-                    let reason = '';
-
-                    // 条件1: 所有怪都被砍了
-                    if (aliveCount === 0) {
-                        shouldEnd = true;
-                        reason = '所有怪物已击杀';
-                    }
-                    // 条件2: 玩家高度超过了最高的怪物
-                    else if (highestMonsterHeight > 0 && currentHeightM > highestMonsterHeight + 2) {
-                        // +2米容差，避免刚好在怪物位置时误判
-                        shouldEnd = true;
-                        reason = `超过最高怪物 (${highestMonsterHeight.toFixed(0)}m)`;
-                    }
-
-                    if (shouldEnd) {
-                        scene.bulletTimeManager.deactivate();
-                        if (GameConfig.debug) {
-                            console.log(`[AutoBT] 智能结束 - ${reason}`);
-                        }
-                        // 不重置 autoBTEligible，让下落检测仍然可以触发
+                if (scene.bulletTimeManager && scene.bulletTimeManager.isActive) {
+                    scene.bulletTimeManager.deactivate();
+                    if (GameConfig.debug) {
+                        console.log(`[AutoBT] Deactivated at 98% - near apex`);
                     }
                 }
+                slime.autoBTEligible = false; // Done for this ascent
             }
         }
 
-        // Deactivate when falling starts (reached apex)
+        // Also deactivate if falling starts while active
         if (slime.vy > 0 && slime.autoBTActivated) {
             const scene = slime.scene as any;
             if (scene.bulletTimeManager && scene.bulletTimeManager.isActive) {
                 scene.bulletTimeManager.deactivate();
                 if (GameConfig.debug) {
-                    console.log(`[AutoBT] Deactivated - reached apex, falling started`);
+                    console.log(`[AutoBT] Deactivated - falling started`);
                 }
             }
             slime.autoBTActivated = false;

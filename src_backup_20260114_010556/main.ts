@@ -35,8 +35,8 @@ const config: Phaser.Types.Core.GameConfig = {
   },
   scene: [GameScene],
   fps: {
-    target: 60,
-    // 使用 requestAnimationFrame (默认) 而非 setTimeout，性能更好
+    target: 120,
+    forceSetTimeOut: true
   }
 };
 

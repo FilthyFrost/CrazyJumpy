@@ -144,6 +144,11 @@ export class GestureManager {
             const absDx = Math.abs(dx);
             const absDy = Math.abs(dy);
 
+            // DEBUG: Log pointer state
+            if (absDx > 5 || absDy > 5) {
+                console.log(`[Gesture] dx:${dx.toFixed(0)} dy:${dy.toFixed(0)} swipeDist:${this.swipeDist.toFixed(0)} locked:${this._laneSwitchLocked}`);
+            }
+
             // Check for Swipe first (priority)
             if (absDx >= this.swipeDist && absDx > absDy) {
                 state.intent = GestureIntent.SWIPE;
@@ -155,7 +160,10 @@ export class GestureManager {
                         swipeDirection = dx > 0 ? 1 : -1;
                         state.swipeConsumed = true;
                         this.lastSwipeTime = currentTime;
+                        console.log(`[Gesture] SWIPE DETECTED! direction:${swipeDirection}`);
                     }
+                } else {
+                    console.log(`[Gesture] Swipe blocked: consumed=${state.swipeConsumed} locked=${this._laneSwitchLocked}`);
                 }
                 continue;
             }
@@ -166,6 +174,7 @@ export class GestureManager {
                 state.holdLocked = true;
                 isHoldActive = true;
                 this._laneSwitchLocked = true;
+                console.log(`[Gesture] HOLD DETECTED! locking lane switch`);
             }
         }
 

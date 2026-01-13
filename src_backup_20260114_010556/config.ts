@@ -219,109 +219,25 @@ export const GameConfig = {
     },
 
     // ===================================================================
-    // 怪物系统 (Monster System) - 纯动态生成
+    // 怪物系统 (Monster System)
     // ===================================================================
     monster: {
-        // ----- 基础移动参数 (会被高度倍率放大) -----
-        moveSpeedMin: 25,             // 基础最小移动速度 (像素/秒)
-        moveSpeedMax: 50,             // 基础最大移动速度 (像素/秒)
+        // ----- 生成参数 -----
+        minSpacing: 5,               // 怪物之间最小Y轴间距 (米)
+
+        // ----- 移动参数 -----
+        moveSpeedMin: 20,             // 最小移动速度 (像素/秒)
+        moveSpeedMax: 60,             // 最大移动速度 (像素/秒)
         directionChangeInterval: 2000, // 方向改变的平均间隔 (毫秒)
         directionChangeVariance: 1500, // 方向改变的随机变化范围
 
-        // ----- A01 怪物 (史莱姆) -----
+        // ----- A01 怪物 -----
         a01: {
+            minHeight: 20,            // 最小生成高度 (米)
+            maxHeight: 1000,           // 最大生成高度 (米)
+            spawnProbability: 0.70,   // 每10米生成概率 (70%)
             frameRate: 8,             // 动画帧率
             size: 48,                 // 显示大小 (像素)
-            minHeightM: 0,            // 最小出现高度 (米)
-            maxHeightM: 9999,         // 最大出现高度 (米) - 全高度出现
-            baseWeight: 1.0,          // 基础权重
-        },
-
-        // ----- A02 怪物 (蝙蝠) -----
-        a02: {
-            frameRate: 10,            // 动画帧率 (蝙蝠翅膀更快)
-            size: 48,                 // 显示大小 (像素) - 与A01相同
-            minHeightM: 200,          // 最小出现高度 (米)
-            maxHeightM: 600,          // 最大出现高度 (米)
-            baseWeight: 0.5,          // 基础权重 (50%概率)
-            // 高度权重曲线：越接近600m权重越高
-            // 公式: weight = baseWeight × (1 + heightBonus × (height - minHeight) / (maxHeight - minHeight))
-            heightBonus: 1.5,         // 高度加成 (600m时权重 = 0.5 × 2.5 = 1.25)
-        },
-        
-        // ----- A03 怪物 (骷髅/高空精英) -----
-        a03: {
-            frameRate: 8,             // 动画帧率
-            size: 48,                 // 显示大小 (像素) - 与A01相同
-            minHeightM: 600,          // 最小出现高度 (米)
-            // 无上限 - 高空主力怪物
-        },
-
-        // ----- 动态导演系统 (Director System) -----
-        // 完全动态生成：只在 PERFECT 跳跃后的子弹时间区域生成怪物
-        director: {
-            enabled: true,                // 是否启用动态导演
-
-            // --- 生成区域 ---
-            // 子弹时间在 80% 触发，怪物从 85% 开始生成
-            // 80%-85% 是"反应缓冲区"，让玩家有时间准备
-            apexRangeStart: 0.85,         // 生成区域开始 (预测顶点的85%)
-            
-            // --- 顶部安全区 (动态上限) ---
-            // 顶部留出安全区，让玩家砍完怪后有时间准备按 space
-            // 公式: apexRangeEnd = minEnd + (baseEnd - minEnd) × e^(-height/tau)
-            // 高度越高，安全区越大
-            apexRangeEndBase: 0.98,       // 低空时的上限 (50m → 98%)
-            apexRangeEndMin: 0.91,        // 高空时的最低上限 (渐近值)
-            apexRangeEndTau: 600,         // 时间常数 (米)
-            minSpacingMeters: 5,          // 怪物之间的最小高度间距 (米) - 确保玩家有时间逐个击杀
-
-            // --- 数量计算 (对数增长) ---
-            // count = baseCount + log2(height/refHeight) * countGrowthFactor
-            baseCount: 4,                 // 保底怪物数量
-            maxCount: 12,                 // 最大怪物数量上限
-            refHeightM: 50,               // 参考高度 (米) - 用于对数计算
-            countGrowthFactor: 2.5,       // 数量增长系数
-
-            // --- 速度计算 (线性增长) ---
-            // speedMult = 1.0 + (height/speedRefHeight) * speedGrowthFactor
-            speedRefHeightM: 400,         // 速度参考高度 (米)
-            speedGrowthFactor: 1.5,       // 速度增长系数
-            maxSpeedMultiplier: 3.0,      // 最大速度倍率上限
-
-            // --- 分布策略 ---
-            preferNonPlayerLane: true,    // 优先在玩家不在的通道生成
-            laneDistribution: [0.35, 0.30, 0.35], // 左/中/右通道权重 (中间略少)
-            
-            // --- 连续难度曲线 ---
-            // 使用分段线性插值，在参考点之间平滑过渡
-            // 格式: [高度(米), 交替概率]
-            difficultyCurve: [
-                [0, 0.90],      // 起点: 90% 交替
-                [200, 0.90],    // 0-200m: 简单区，保持90%
-                [400, 0.50],    // 200-400m: 快速下降到50%
-                [1000, 0.40],   // 400-1000m: 缓慢下降到40%
-                [2000, 0.30],   // 1000-2000m: 继续下降到30%
-                [3000, 0.20],   // 2000-3000m: 下降到20%
-                [5000, 0.0],    // 3000m+: 逐渐趋近0%
-            ],
-            
-            // --- 动态间距系统 ---
-            dynamicSpacing: {
-                enabled: true,
-                baseSpacingM: 4,              // 基础间距 (米)
-                
-                // 高度加成
-                heightRefM: 600,
-                heightFactor: 0.4,
-                heightMaxBonus: 1.0,
-                
-                // 同侧加成 (连续左左或右右)
-                sameSideBonus: 1.0,
-                
-                // 对角加成 (左↔右)
-                diagonalBonus: 1.2,
-            },
         },
     },
 
@@ -330,53 +246,16 @@ export const GameConfig = {
     // ===================================================================
     bulletTime: {
         costPerUse: 3,              // 每次使用消耗 (秒)
+        duration: 3.0,                // 每次持续时间 (秒) - 真实时间
         cooldown: 0.2,                // 冷却时间 (秒) - 真实时间
+        timeScale: 0.35,               // 子弹时间时的游戏速度 (0.5x)
         minActivationHeight: 50,      // 最小激活高度 (米)
-
-        // --- 动态 timeScale (难度曲线) ---
-        // 公式: timeScale = minScale + (maxScale - minScale) × e^(-height/tau)
-        // 设计理念: 高空速度快需要更慢的 timeScale 来补偿，保持难度循序渐进
-        // 难度上限设在 3000m 左右
-        timeScaleMax: 0.42,           // 低空 timeScale (更慢 = 更容易)
-        timeScaleMin: 0.20,           // 高空 timeScale (稍快 = 更难，但仍可控)
-        timeScaleTau: 1500,           // 难度曲线常数 (米) - 1500m达到中等难度
-
-        // --- 动态时长系统 (渐近线曲线) ---
-        // 公式: duration = baseDuration + maxExtraDuration × (1 - e^(-height/tau))
-        // 特点: 低空快速增长，高空渐近趋向上限，适合无限模式
-        baseDuration: 3.0,            // 基础持续时间 (秒)
-        maxExtraDuration: 20.0,       // 额外时长上限 (秒) - 渐近线
-        durationTau: 800,             // 时间常数 (米) - 控制曲线陡峭度
 
         maxEnergyBase: 12.0,           // 基础能量上限 (秒)
         maxEnergyExtended: 16.0,       // 扩展能量上限 (秒)
 
         energyPerKill: 0.2,           // 击杀回能 (秒)
         killRefundCap: 1.0,           // 击杀总共可获得的最大上限扩展 (秒)
-    },
-
-    // ===================================================================
-    // 掉落物品系统 (Pickup System)
-    // ===================================================================
-    pickup: {
-        coin: {
-            size: 28,                     // 铜币显示大小 (像素)
-        },
-        gem: {
-            size: 32,                     // 宝石显示大小 (像素)
-        },
-        // 怪物掉落表
-        drops: {
-            A01: {
-                coinChance: 1.0,          // 铜币掉落概率 (100%)
-                gemChance: 0.2,           // 宝石掉落概率 (20%)
-            },
-            A02: {
-                coinChance: 1.0,          // 铜币掉落概率 (100%)
-                gemChance: 0.5,           // 宝石掉落概率 (50%) - 更高！
-                // TODO: 未来可以添加更稀有的材料
-            },
-        },
     },
 
     // ===================================================================

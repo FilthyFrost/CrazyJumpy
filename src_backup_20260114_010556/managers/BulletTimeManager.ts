@@ -22,12 +22,10 @@ export class BulletTimeManager {
     // Timers (Real Time)
     private activeTimer: number = 0;        // How long current activation has lasted
     private cooldownTimer: number = 0;      // Current cooldown remaining
-    private currentDuration: number = 3.0;  // Dynamic duration for current activation
 
     constructor(scene: Phaser.Scene) {
         this.scene = scene;
         this.energyCap = GameConfig.bulletTime.maxEnergyBase;
-        this.currentDuration = GameConfig.bulletTime.baseDuration ?? 3.0;
     }
 
     /**
@@ -49,8 +47,8 @@ export class BulletTimeManager {
             // Auto-cancel conditions
             let shouldCancel = false;
 
-            // 1. Duration expired (use dynamic duration)
-            if (this.activeTimer >= this.currentDuration) {
+            // 1. Duration expired
+            if (this.activeTimer >= GameConfig.bulletTime.duration) {
                 shouldCancel = true;
             }
             // 2. Apex reached (not ascending) or moving down
@@ -98,7 +96,7 @@ export class BulletTimeManager {
         this.energy -= cost;
         this.isActive = true;
         this.activeTimer = 0;
-        this.targetTimeScale = GameConfig.bulletTime.timeScaleMax;
+        this.targetTimeScale = GameConfig.bulletTime.timeScale;
 
         // Notify scene (for sound/visuals)
         this.scene.events.emit('bullet-time-start');
@@ -125,57 +123,11 @@ export class BulletTimeManager {
      * Used by auto bullet time at apex
      */
     public forceActivate(): void {
-        this.forceActivateWithHeight(50); // Default to minimum height
-    }
-
-    /**
-     * Force activate Bullet Time with dynamic duration and timeScale based on height
-     * 
-     * 动态时长公式: duration = baseDuration + maxExtraDuration × (1 - e^(-height/durationTau))
-     * 动态速度公式: timeScale = minScale + (maxScale - minScale) × e^(-height/scaleTau)
-     * 
-     * 设计理念:
-     * - 高度越高，绝对速度越快
-     * - 需要用更低的 timeScale 来补偿，保持难度循序渐进
-     * - 难度上限设在 3000m 左右，骨灰级玩家的极限挑战
-     * 
-     * 难度曲线:
-     * - 50m   → 0.42x (新手友好)
-     * - 300m  → 0.38x (入门)
-     * - 600m  → 0.34x (进阶)
-     * - 1000m → 0.30x (高手)
-     * - 1500m → 0.27x (大师)
-     * - 3000m → 0.22x (极限)
-     * 
-     * @param apexHeightM The predicted apex height in meters
-     */
-    public forceActivateWithHeight(apexHeightM: number): void {
         if (this.isActive) return;
-
-        // ===== 动态时长计算 =====
-        const baseDuration = GameConfig.bulletTime.baseDuration ?? 3.0;
-        const maxExtraDuration = GameConfig.bulletTime.maxExtraDuration ?? 20.0;
-        const durationTau = GameConfig.bulletTime.durationTau ?? 800;
-
-        const extraDuration = maxExtraDuration * (1 - Math.exp(-apexHeightM / durationTau));
-        this.currentDuration = baseDuration + extraDuration;
-
-        // ===== 动态 timeScale 计算 (难度曲线) =====
-        const maxScale = GameConfig.bulletTime.timeScaleMax ?? 0.42;
-        const minScale = GameConfig.bulletTime.timeScaleMin ?? 0.20;
-        const scaleTau = GameConfig.bulletTime.timeScaleTau ?? 1500;
-
-        // 公式: timeScale = minScale + (maxScale - minScale) × e^(-height/tau)
-        // 高度越高 → timeScale 越低 → 游戏速度越慢 → 补偿高绝对速度
-        const dynamicTimeScale = minScale + (maxScale - minScale) * Math.exp(-apexHeightM / scaleTau);
 
         this.isActive = true;
         this.activeTimer = 0;
-        this.targetTimeScale = dynamicTimeScale;
-
-        if (GameConfig.debug) {
-            console.log(`[BulletTime] Height: ${apexHeightM.toFixed(0)}m | Duration: ${this.currentDuration.toFixed(1)}s | TimeScale: ${dynamicTimeScale.toFixed(2)}x`);
-        }
+        this.targetTimeScale = GameConfig.bulletTime.timeScale;
 
         // Notify scene (for sound/visuals)
         this.scene.events.emit('bullet-time-start');
@@ -193,9 +145,7 @@ export class BulletTimeManager {
             this.energy = this.energyCap;
         }
 
-        if (GameConfig.debug) {
-            console.log(`[BulletTime] Added energy: ${amount.toFixed(2)}s, Current: ${this.energy.toFixed(2)}s`);
-        }
+        console.log(`[BulletTime] Added energy: ${amount.toFixed(2)}s, Current: ${this.energy.toFixed(2)}s`);
     }
 
     /**
@@ -237,28 +187,5 @@ export class BulletTimeManager {
     public getCooldownProgress(): number {
         if (this.cooldownTimer <= 0) return 0;
         return this.cooldownTimer / GameConfig.bulletTime.cooldown;
-    }
-
-    /**
-     * Get remaining time ratio for UI display
-     * @returns 0 = just started (full), 1 = time expired (empty)
-     */
-    public getTimeProgress(): number {
-        if (!this.isActive) return 0;
-        return Math.min(1, this.activeTimer / this.currentDuration);
-    }
-
-    /**
-     * Get current duration for this activation
-     */
-    public getCurrentDuration(): number {
-        return this.currentDuration;
-    }
-
-    /**
-     * Get active timer value
-     */
-    public getActiveTimer(): number {
-        return this.activeTimer;
     }
 }

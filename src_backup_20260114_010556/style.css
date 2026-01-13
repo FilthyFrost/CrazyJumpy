@@ -1,0 +1,34 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: #000;
+  /* Black background (matches game) */
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  /* Prevent pull-to-refresh and overscroll */
+  overscroll-behavior: none;
+}
+
+#app {
+  width: 100%;
+  height: 100dvh;
+  /* Modern mobile viewport unit */
+  /* Handle notches visually if background doesn't cover them (game canvas handles this actually) 
+     but good to have as fallback container sizing */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+/* Canvas fills container directly */
+#app canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}

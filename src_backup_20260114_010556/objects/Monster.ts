@@ -1,23 +1,19 @@
 /**
  * Monster - 怪物基类
  * 
- * 支持多种怪物类型：
- * - A01: 史莱姆 (0-600m，基础怪物)
- * - A02: 蝙蝠 (200-1000m，中空精英)
- * - A03: 骷髅 (600m+，高空精英)
+ * 管理单个怪物的状态、动画和移动逻辑
  */
 
 import Phaser from 'phaser';
 import { GameConfig } from '../config';
 
-export type MonsterType = 'A01' | 'A02' | 'A03';
+export type MonsterType = 'A01';
 
 export interface MonsterConfig {
     type: MonsterType;
     x: number;
     y: number;          // 世界Y坐标 (越小=越高)
     heightMeters: number; // 高度 (米)
-    speedMultiplier?: number; // 速度倍率 (默认1.0)
 }
 
 export class Monster {
@@ -32,13 +28,12 @@ export class Monster {
     public isAlive: boolean = true;
 
     // 通道系统
-    public currentLane: number = 1;  // 0=左, 1=中, 2=右 (创建时固定，不会改变)
+    public currentLane: number = 1;  // 0=左, 1=中, 2=右
     private screenWidth: number;
 
     // 移动AI
     private moveDirection: -1 | 1 = 1;  // -1=左, 1=右
     private moveSpeed: number = 40;
-    private speedMultiplier: number = 1.0; // 速度倍率 (高度越高越快)
     private nextDirectionChange: number = 0;
 
     constructor(scene: Phaser.Scene, config: MonsterConfig, screenWidth: number) {
@@ -48,26 +43,19 @@ export class Monster {
         this.heightMeters = config.heightMeters;
         this.type = config.type;
         this.screenWidth = screenWidth;
-        this.speedMultiplier = config.speedMultiplier ?? 1.0;
 
-        // 根据类型获取配置
-        const typeConfig = this.getTypeConfig();
-        const size = typeConfig.size;
-
-        // 创建精灵 - 根据类型选择初始纹理
-        let textureKey: string;
-        switch (this.type) {
-            case 'A02': textureKey = 'monster_a02_right_1'; break;
-            case 'A03': textureKey = 'monster_a03_right_1'; break;
-            default:    textureKey = 'monster_a01_right_1'; break;
-        }
-        this.sprite = scene.add.sprite(this.x, this.y, textureKey)
+        // 创建精灵
+        const size = GameConfig.monster.a01.size;
+        this.sprite = scene.add.sprite(this.x, this.y, 'monster_a01_right_1')
             .setDisplaySize(size, size)
             .setDepth(5);
 
         // 随机初始方向
         this.moveDirection = Math.random() > 0.5 ? 1 : -1;
-        this.updateMoveSpeed();
+        this.moveSpeed = Phaser.Math.Between(
+            GameConfig.monster.moveSpeedMin,
+            GameConfig.monster.moveSpeedMax
+        );
 
         // 设置下次方向改变时间
         this.scheduleDirectionChange();
@@ -77,43 +65,6 @@ export class Monster {
 
         // 播放初始动画
         this.playDirectionAnimation();
-    }
-
-    /**
-     * 获取怪物类型配置
-     */
-    private getTypeConfig(): { size: number; frameRate: number } {
-        switch (this.type) {
-            case 'A02':
-                return {
-                    size: GameConfig.monster.a02?.size ?? 48,
-                    frameRate: GameConfig.monster.a02?.frameRate ?? 10,
-                };
-            case 'A03':
-                return {
-                    size: GameConfig.monster.a03?.size ?? 48,
-                    frameRate: GameConfig.monster.a03?.frameRate ?? 8,
-                };
-            case 'A01':
-            default:
-                return {
-                    size: GameConfig.monster.a01?.size ?? 48,
-                    frameRate: GameConfig.monster.a01?.frameRate ?? 8,
-                };
-        }
-    }
-
-    /**
-     * 更新移动速度 (考虑高度倍率)
-     */
-    private updateMoveSpeed(): void {
-        const baseSpeed = Phaser.Math.Between(
-            GameConfig.monster.moveSpeedMin,
-            GameConfig.monster.moveSpeedMax
-        );
-        // A02 (蝙蝠) 移动速度稍快
-        const typeBonus = this.type === 'A02' ? 1.3 : 1.0;
-        this.moveSpeed = baseSpeed * this.speedMultiplier * typeBonus;
     }
 
     /**
@@ -131,24 +82,21 @@ export class Monster {
         const moveAmount = this.moveDirection * this.moveSpeed * dt;
         this.x += moveAmount;
 
-        // ===== 边界检查 - 怪物只能在自己通道内活动 =====
-        const laneCount = GameConfig.lane.count ?? 3;
-        const laneWidth = this.screenWidth / laneCount;
-        
-        // 计算当前通道的边界 - 25%边距确保怪物始终在攻击范围内
-        const laneLeftBound = this.currentLane * laneWidth + laneWidth * 0.25;
-        const laneRightBound = (this.currentLane + 1) * laneWidth - laneWidth * 0.25;
-        
-        if (this.x < laneLeftBound) {
-            this.x = laneLeftBound;
+        // 边界检查 - 不让怪物移出画布
+        const margin = GameConfig.monster.a01.size / 2;
+        if (this.x < margin) {
+            this.x = margin;
             this.changeDirection();
-        } else if (this.x > laneRightBound) {
-            this.x = laneRightBound;
+        } else if (this.x > this.screenWidth - margin) {
+            this.x = this.screenWidth - margin;
             this.changeDirection();
         }
 
         // 更新精灵位置
         this.sprite.setPosition(this.x, this.y);
+
+        // 更新当前通道
+        this.updateCurrentLane();
     }
 
     /**
@@ -165,7 +113,10 @@ export class Monster {
      */
     private changeDirection(): void {
         this.moveDirection = this.moveDirection === 1 ? -1 : 1;
-        this.updateMoveSpeed();
+        this.moveSpeed = Phaser.Math.Between(
+            GameConfig.monster.moveSpeedMin,
+            GameConfig.monster.moveSpeedMax
+        );
         this.scheduleDirectionChange();
         this.playDirectionAnimation();
     }
@@ -184,15 +135,7 @@ export class Monster {
      * 播放对应方向的动画
      */
     private playDirectionAnimation(): void {
-        // 根据类型选择动画前缀
-        let prefix: string;
-        switch (this.type) {
-            case 'A02': prefix = 'monster_a02'; break;
-            case 'A03': prefix = 'monster_a03'; break;
-            default:    prefix = 'monster_a01'; break;
-        }
-        const animKey = this.moveDirection === 1 ? `${prefix}_right` : `${prefix}_left`;
-        
+        const animKey = this.moveDirection === 1 ? 'monster_a01_right' : 'monster_a01_left';
         if (this.sprite.anims.currentAnim?.key !== animKey) {
             this.sprite.play(animKey);
         }

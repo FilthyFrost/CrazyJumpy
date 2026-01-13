@@ -106,7 +106,7 @@ export default class SkyGradientLUT {
             this.lutColors.push(color);
         }
 
-        // Initialization complete
+        console.log(`[SkyGradientLUT] Initialized with ${this.lutColors.length} colors`);
 
         // Set initial color based on ground level
         this.update(this.groundYpx);

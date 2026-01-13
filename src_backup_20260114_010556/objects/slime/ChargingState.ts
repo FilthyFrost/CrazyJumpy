@@ -348,20 +348,6 @@ export class ChargingState implements ISlimeState {
         }
 
         if (slime.holdLockout) {
-            // ===== DEATH CHECK: Held too long above 100m = death =====
-            const PIXELS_PER_METER = GameConfig.display.pixelsPerMeter ?? 50;
-            const SAFE_ZONE_METERS = 100;
-            const heightMeters = slime.landingApexHeight / PIXELS_PER_METER;
-
-            if (heightMeters > SAFE_ZONE_METERS) {
-                // Player held too long - instant death
-                slime.healthManager.onLanding(slime.landingApexHeight, 'FAILED', true);
-                slime.showFeedback('FAILED');
-                if (GameConfig.debug) {
-                    console.log(`[DEATH] Held too long from ${heightMeters.toFixed(0)}m`);
-                }
-            }
-
             slime.perfectStreak = 0;  // Reset combo on failure
             slime.transitionTo('GROUNDED_IDLE');
             return;
@@ -518,9 +504,10 @@ export class ChargingState implements ISlimeState {
 
             targetH = growthH;
 
-            // Debug logging
+            // Debug logging (only in development)
             if (GameConfig.debug) {
-                console.log(`[PERFECT] H:${Math.round(slime.lastApexHeight)} Rate:${((targetMult - 1) * 100).toFixed(0)}% E:${energyRatio.toFixed(2)} -> ${Math.round(targetH)}`);
+                // (streakBonus is actually 2.0 in the variable, but we used 1.5 for the calculation logic to be safe)
+                console.log(`[PERFECT] Height:${Math.round(slime.lastApexHeight)} GrowthRate:${((targetMult - 1) * 100).toFixed(1)}% Energy:${energyRatio.toFixed(2)} StreakBonus:${streakBonus} -> ${Math.round(targetH)}`);
             }
 
         } else if (rating === 'NORMAL') {
@@ -592,15 +579,6 @@ export class ChargingState implements ISlimeState {
 
         if (GameConfig.debug && slime.autoBTEligible) {
             console.log(`[AutoBT] Eligible! Predicted apex: ${Math.round(predictedApexMeters)}m`);
-        }
-
-        // ===== 动态导演系统：在 PERFECT 跳跃顶点生成怪物 =====
-        // 确保子弹时间（高光时刻）有怪物可打
-        if (slime.autoBTEligible) {
-            const scene = slime.scene as any;
-            if (scene.monsterManager) {
-                scene.monsterManager.spawnApexMonsters(predictedApexPx, slime.currentLane);
-            }
         }
 
         slime.transitionTo('AIRBORNE');
