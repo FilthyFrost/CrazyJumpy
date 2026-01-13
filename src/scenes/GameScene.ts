@@ -155,9 +155,9 @@ export default class GameScene extends Phaser.Scene {
         }
 
         // Load Pickup items
-        this.load.image('pickup_coin', 'assets/Pickups/CoinsCopper0.png');   // 铜币
-        this.load.image('pickup_gem', 'assets/Pickups/A01_Wing.png');        // A01材料
-        this.load.image('pickup_wing', 'assets/Pickups/A02_Wing.png');       // A02翅膀材料
+        this.load.image('pickup_coin', 'assets/drops/CoinsCopper0.png');   // 铜币
+        this.load.image('pickup_gem', 'assets/drops/A01_Wing.png');        // A01材料
+        this.load.image('pickup_wing', 'assets/drops/A02_Wing.png');       // A02翅膀材料
     }
 
     create() {
