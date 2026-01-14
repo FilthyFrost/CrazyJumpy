@@ -6,6 +6,13 @@ export interface PickupConfig {
     type: PickupType;
     x: number;
     y: number;
+    noAttractDelay?: number;     // 可选：禁用追踪/拾取的延迟时间（秒）
+    disableAttract?: boolean;    // 创建时即禁止吸附
+    stayOnGround?: boolean;      // grounded 状态时不漂浮，静止
+    // 死亡喷射专用：自定义初速度
+    ejectVxOverride?: number;
+    ejectVyOverride?: number;
+    groundY?: number;            // 地面Y坐标，用于落地检测
 }
 
 /**
@@ -27,14 +34,19 @@ export class Pickup {
     public y: number;
 
     // State machine
-    private state: 'ejecting' | 'chasing' = 'ejecting';
+    private state: 'ejecting' | 'chasing' | 'grounded' = 'ejecting';
     private stateTimer: number = 0;
+    private attractEnabled: boolean = true;  // 是否允许追踪玩家
+    private collectEnabled: boolean = true;  // 是否允许被拾取
+    private stayOnGround: boolean = false;   // grounded 时是否静止不漂浮
 
     // Ejection parameters (弹出期)
     private ejectDuration: number = 0.4;   // 弹出持续时间
     private ejectVx: number = 0;           // 弹出X速度
     private ejectVy: number = 0;           // 弹出Y速度
     private ejectFriction: number = 8;     // 弹出摩擦力
+    private groundY: number = Infinity;    // 地面Y坐标，用于落地检测
+    private useDeathEject: boolean = false; // 是否使用死亡喷射模式
 
     // Chase parameters (追踪期)
     private baseChaseSpeed: number = 1000;  // 基础追踪速度
@@ -71,11 +83,23 @@ export class Pickup {
         this.sprite.setDepth(150);
 
         // ===== 弹出动画 =====
-        // 随机方向弹出，模拟物品从怪物身上飞出的效果
-        const ejectAngle = Math.random() * Math.PI * 2;
-        const ejectSpeed = 200 + Math.random() * 150; // 200-350 px/s
-        this.ejectVx = Math.cos(ejectAngle) * ejectSpeed;
-        this.ejectVy = Math.sin(ejectAngle) * ejectSpeed - 200; // 向上偏移，有抛物线效果
+        // 死亡喷射模式：使用传入的初速度
+        if (config.ejectVxOverride !== undefined && config.ejectVyOverride !== undefined) {
+            this.ejectVx = config.ejectVxOverride;
+            this.ejectVy = config.ejectVyOverride;
+            this.useDeathEject = true;
+            this.groundY = config.groundY ?? Infinity;
+            this.ejectDuration = 5.0; // 死亡喷射需要更长时间让物品落地
+            // 死亡喷射物品需要更高的深度，以便在游戏结束界面上方显示
+            this.sprite.setDepth(1999);
+            console.log('[Pickup] Death eject created at', this.x.toFixed(0), this.y.toFixed(0), 'vx:', this.ejectVx.toFixed(0), 'vy:', this.ejectVy.toFixed(0));
+        } else {
+            // 普通弹出：随机方向弹出，模拟物品从怪物身上飞出的效果
+            const ejectAngle = Math.random() * Math.PI * 2;
+            const ejectSpeed = 200 + Math.random() * 150; // 200-350 px/s
+            this.ejectVx = Math.cos(ejectAngle) * ejectSpeed;
+            this.ejectVy = Math.sin(ejectAngle) * ejectSpeed - 200; // 向上偏移，有抛物线效果
+        }
 
         // Spawn pop animation
         this.sprite.setScale(0);
@@ -89,6 +113,18 @@ export class Pickup {
 
         // Add glow effect during ejection
         this.sprite.setTint(0xffffaa);
+
+        // 可选：禁用吸附/拾取一段时间（用于死亡喷出时不立刻吸回）
+        if (config.noAttractDelay && config.noAttractDelay > 0) {
+            this.attractEnabled = false;
+            this.collectEnabled = false;
+            this.stateTimer = -config.noAttractDelay; // 计时到0再进入正常状态
+        }
+        if (config.disableAttract) {
+            this.attractEnabled = false;
+            this.collectEnabled = false;
+        }
+        this.stayOnGround = !!config.stayOnGround;
     }
 
     /**
@@ -104,6 +140,11 @@ export class Pickup {
 
         this.stateTimer += dt;
 
+        // 死亡喷射模式调试
+        if (this.useDeathEject && this.stateTimer < 0.1) {
+            console.log('[Pickup] Death eject update: state=', this.state, 'x:', this.x.toFixed(0), 'y:', this.y.toFixed(0), 'vy:', this.ejectVy.toFixed(0));
+        }
+
         // State machine
         switch (this.state) {
             case 'ejecting':
@@ -111,6 +152,10 @@ export class Pickup {
             
             case 'chasing':
                 return this.updateChasing(dt, playerX, playerY, playerSpeed);
+
+            case 'grounded':
+                // 简单的轻微漂浮效果，可后续优化
+                return this.updateGrounded(dt);
         }
     }
 
@@ -118,6 +163,50 @@ export class Pickup {
      * 弹出期：物品向外飞出，此时不可拾取
      */
     private updateEjecting(dt: number): boolean {
+        // 可选延迟吸附：stateTimer < 0 表示还在禁吸附计时
+        if (this.stateTimer < 0) {
+            // 仅计时，不更新位置
+            return false;
+        }
+
+        // ===== 死亡喷射模式：使用物理模拟 =====
+        if (this.useDeathEject) {
+            // 应用速度
+            this.x += this.ejectVx * dt;
+            this.y += this.ejectVy * dt;
+
+            // 应用更强重力，让物品快速落地
+            const gravity = 1800; // 重力加速度 px/s²（增大）
+            this.ejectVy += gravity * dt;
+
+            // 空气阻力（仅水平方向，让抛物线更自然）
+            this.ejectVx *= Math.exp(-2.0 * dt);
+
+            // 更新精灵位置
+            this.sprite.x = this.x;
+            this.sprite.y = this.y;
+
+            // 旋转效果
+            this.sprite.angle += this.ejectVx * 0.5 * dt;
+
+            // 落地检测
+            if (this.y >= this.groundY) {
+                this.y = this.groundY;
+                this.sprite.y = this.y;
+                this.sprite.angle = 0;
+                this.sprite.clearTint();
+                
+                // 进入 grounded 状态，静止不动
+                this.state = 'grounded';
+                this.stateTimer = 0;
+                this.attractEnabled = false;
+                this.collectEnabled = false;
+                console.log('[Pickup] Death eject landed at', this.x.toFixed(0), this.y.toFixed(0));
+            }
+            return false;
+        }
+
+        // ===== 普通弹出模式 =====
         // Apply velocity with friction
         this.x += this.ejectVx * dt;
         this.y += this.ejectVy * dt;
@@ -165,13 +254,18 @@ export class Pickup {
      * 特殊效果：当接近玩家时会"最终冲刺"，加速飞入玩家身体
      */
     private updateChasing(dt: number, playerX: number, playerY: number, playerSpeed: number): boolean {
+        if (!this.attractEnabled) {
+            // 如果禁止吸附，则转入 grounded 状态
+            this.state = 'grounded';
+            return false;
+        }
         // Calculate direction to player
         const dx = playerX - this.x;
         const dy = playerY - this.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
 
         // Check if close enough to pick up
-        if (dist < this.pickupRadius) {
+        if (dist < this.pickupRadius && this.collectEnabled) {
             this.collect();
             return true;
         }
@@ -214,6 +308,19 @@ export class Pickup {
     }
 
     /**
+     * Grounded 状态：不再追踪，只做轻微漂浮
+     */
+    private updateGrounded(_dt: number): boolean {
+        if (!this.stayOnGround) {
+            // 简易漂浮：缓慢下沉一点点，再上浮
+            this.sprite.y = this.y + Math.sin(this.scene.time.now * 0.005) * 3;
+        } else {
+            this.sprite.y = this.y;
+        }
+        return false;
+    }
+
+    /**
      * Collect this pickup
      */
     private collect(): void {
@@ -234,6 +341,28 @@ export class Pickup {
         });
     }
 
+    /** 禁用吸附/拾取，物品停留地面 */
+    public disableAttract(): void {
+        // 死亡喷射模式的物品不应该被改变状态
+        if (this.useDeathEject && this.state === 'ejecting') return;
+        
+        this.attractEnabled = false;
+        this.collectEnabled = false;
+        this.state = 'grounded';
+    }
+
+    /** 重新允许吸附/拾取（如需要） */
+    public enableAttract(): void {
+        // 死亡喷射模式的物品不应该被重新启用吸附
+        if (this.useDeathEject) return;
+        
+        this.attractEnabled = true;
+        this.collectEnabled = true;
+        if (this.state === 'grounded') {
+            this.state = 'chasing';
+            this.stateTimer = 0;
+        }
+    }
     /**
      * Destroy this pickup immediately
      */

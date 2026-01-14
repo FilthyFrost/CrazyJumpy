@@ -12,6 +12,7 @@ import { GameConfig } from '../config';
  */
 export class SlimeHealthManager {
     private scene: Phaser.Scene;
+    private invincible: boolean = false;
 
     // Health state
     public currentHealth: number = 100;
@@ -70,7 +71,7 @@ export class SlimeHealthManager {
      * @param holdLockout - True if player held space too long (missed bounce)
      */
     public onLanding(heightPixels: number, rating: 'PERFECT' | 'NORMAL' | 'FAILED', holdLockout: boolean): void {
-        if (this.isDead) return;
+        if (this.isDead || this.invincible) return;
 
         const heightMeters = heightPixels / this.PIXELS_PER_METER;
 
@@ -143,7 +144,7 @@ export class SlimeHealthManager {
      * Apply damage to the slime
      */
     public takeDamage(damage: number): void {
-        if (this.isDead || damage <= 0) return;
+        if (this.isDead || this.invincible || damage <= 0) return;
 
         this.currentHealth = Math.max(0, this.currentHealth - damage);
 
@@ -163,6 +164,7 @@ export class SlimeHealthManager {
      * Kill the slime
      */
     private die(reason: string): void {
+        if (this.invincible) return;
         this.isDead = true;
         this.currentHealth = 0;
 
@@ -263,6 +265,20 @@ export class SlimeHealthManager {
         this.isDead = false;
         this.damageTextTimer = 0;
         this.damageText.setAlpha(0);
+    }
+
+    /**
+     * Enable/disable invincibility (no damage, no death).
+     */
+    public setInvincible(enabled: boolean): void {
+        this.invincible = enabled;
+        if (enabled) {
+            this.isDead = false;
+            this.currentHealth = this.maxHealth;
+            this.damageTextTimer = 0;
+            this.healthBarVisibleTimer = 0;
+            this.damageText.setAlpha(0);
+        }
     }
 
     /**

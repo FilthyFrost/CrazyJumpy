@@ -5,6 +5,7 @@ import { AirborneState } from './slime/AirborneState';
 import { ChargingState } from './slime/ChargingState';
 import type { ISlimeState } from './slime/ISlimeState';
 import { SlimeHealthManager } from './SlimeHealthManager';
+import type { MonsterType } from './Monster';
 
 export type SlimeState = 'GROUNDED_IDLE' | 'AIRBORNE' | 'GROUND_CHARGING';
 
@@ -79,18 +80,37 @@ export default class Slime {
     public comboText!: Phaser.GameObjects.Text;
     public comboTimer: number = 0;
 
-    // Auto Bullet Time at Apex (for PERFECT bounces > 50m)
+    // Auto Bullet Time at Apex (for PERFECT bounces > 50m, or NORMAL with reduced effect)
     public predictedApexHeight: number = 0;     // Predicted apex height in pixels (calculated at launch)
     public launchY: number = 0;                 // Y position at launch (for calculating progress)
     public autoBTEligible: boolean = false;     // Whether this ascent qualifies for auto bullet time
     public autoBTActivated: boolean = false;    // Whether auto bullet time has been triggered this ascent
+    public launchRating: 'PERFECT' | 'NORMAL' | 'FAILED' = 'PERFECT'; // Rating of the launch that triggered this ascent
+
+    // DEBUFFS
+    public poison1Duration: number = 0;   // 中毒I总时长
+    public poison2Duration: number = 0;   // 中毒II总时长
+    private poisonTickTimer: number = 0;  // 伤害tick计时
+    public slowImpulseTimer: number = 0;  // 上升减速的提示持续一点点时间（仅视觉/提示用）
+    private debuffGraceUntil: number = 0; // 攻击击杀后短暂无敌（防止同帧撞怪）
+    private recentHitGraceUntil: number = 0; // 砍中怪物后短暂无负面（砍到必然接触）
+    private swingGraceUntil: number = 0;  // 攻击挥刀窗口内免疫负面（确保先判击杀）
+    public recentKilledIds: Set<number> = new Set(); // 近期被击杀的怪物ID，防止同帧撞击判负面
+    private recentHitTimestamp: number = 0; // 最近一次击杀怪物的时间戳（ms）
+
+    // Test mode: pending initial jump height (pixels) to override first idle jump
+    public pendingTestJumpHeightPx: number = 0;
 
     // Charge Effect Animation
     public chargeEffectSprite!: Phaser.GameObjects.Sprite;
     public chargeEffectFrame: number = 0;          // Current frame (1-11)
     public chargeEffectState: 'idle' | 'charging' | 'holding' | 'releasing' = 'idle';
     public chargeEffectTimer: number = 0;          // Animation timer
-    private readonly CHARGE_FRAME_DURATION = 0.05; // Time per frame during charge (faster)
+    private chargeEffectDisplayScale: number = 3;  // Smoothed scale
+    private chargeEffectDisplayAlpha: number = 1;  // Smoothed alpha
+    // Charging frames 1-6, release frames 7-11
+    private readonly RELEASE_START_FRAME = 7;      // Release starts at frame 7
+    private readonly RELEASE_END_FRAME = 11;       // Release ends at frame 11
     private readonly RELEASE_FRAME_DURATION = 0.04; // Time per frame during release
 
     private states: Record<SlimeState, ISlimeState>;
@@ -177,11 +197,11 @@ export default class Slime {
             emitting: false
         }).setDepth(15);
 
-        // Charge effect sprite (overlays player during charging)
-        this.chargeEffectSprite = scene.add.sprite(x, y, 'charge_1');
-        this.chargeEffectSprite.setOrigin(0.5, 0.5);
-        this.chargeEffectSprite.setDepth(101); // Above player
-        this.chargeEffectSprite.setScale(3); // Scale up the 20x16 sprite
+        // Charge effect sprite (behind player, anchored在脚下)
+        this.chargeEffectSprite = scene.add.sprite(x, y, 'chargeup_1');
+        this.chargeEffectSprite.setOrigin(0.5, 1); // 脚底对齐
+        this.chargeEffectSprite.setDepth(this.graphics.depth - 1); // Behind player
+        this.chargeEffectSprite.setScale(3); // Scale up as needed
         this.chargeEffectSprite.setVisible(false);
 
         // Initial velocity (don't override y position - use the passed in value)
@@ -228,6 +248,9 @@ export default class Slime {
         this.prevSpaceDown = isSpaceDown;
 
         this.currentState.update(this, dt, isSpaceDown, justPressed, justReleased);
+
+        // Debuff ticking（中毒/减速）
+        this.updateDebuffs(dt);
 
         // Hard clamp: never allow embedding when not airborne
         // This failsafe ensures player center never goes below ground level
@@ -662,6 +685,9 @@ export default class Slime {
     public playAttackAnimation(direction: -1 | 1, onHit?: (dir: -1 | 1, x: number, y: number) => void): void {
         // Set flag to prevent normal animation updates
         this.isPlayingAttackAnimation = true;
+        // 攻击开始即进入挥刀免疫窗口，确保先判击杀再判负面
+        const nowMs = this.scene.time.now;
+        this.addSwingGrace(250, nowMs);
 
         // Choose attack animation based on direction
         const attackAnim = direction === 1 ? 'attack_right' : 'attack_left';
@@ -679,6 +705,8 @@ export default class Slime {
                 if (onHit) {
                     onHit(direction, this.x, this.y);
                 }
+                // 命中瞬间再延长免疫，防止同帧接触判负面
+                this.addSwingGrace(200, this.scene.time.now);
             }
         };
         this.graphics.on('animationupdate', frameHandler);
@@ -707,7 +735,10 @@ export default class Slime {
         this.chargeEffectState = 'charging';
         this.chargeEffectFrame = 1;
         this.chargeEffectTimer = 0;
-        this.chargeEffectSprite.setTexture('charge_1');
+        this.chargeEffectSprite.setTexture('chargeup_1');
+        this.chargeEffectSprite.setDepth(this.graphics.depth - 1); // Keep behind player
+        this.chargeEffectDisplayScale = 3;
+        this.chargeEffectDisplayAlpha = 1;
         this.chargeEffectSprite.setVisible(true);
     }
 
@@ -715,9 +746,12 @@ export default class Slime {
      * Complete the charge effect (play remaining frames after release)
      */
     public completeChargeEffect(): void {
-        if (this.chargeEffectState === 'holding') {
+        if (this.chargeEffectState === 'charging' || this.chargeEffectState === 'holding') {
             this.chargeEffectState = 'releasing';
             this.chargeEffectTimer = 0;
+            // Ensure release starts at frame 7+
+            this.chargeEffectFrame = Math.max(this.RELEASE_START_FRAME, this.chargeEffectFrame);
+            this.chargeEffectSprite.setTexture(`chargeup_${this.chargeEffectFrame}`);
         }
     }
 
@@ -733,9 +767,18 @@ export default class Slime {
      * Update charge effect animation each frame
      */
     private updateChargeEffect(dt: number): void {
-        // Position sprite on player's VISUAL position (graphics.y accounts for compression/sinking)
-        // This is a standard game dev practice: effects follow render position, not physics position
-        this.chargeEffectSprite.setPosition(this.graphics.x, this.graphics.y);
+        // 如果不在地面蓄力且当前也不是释放动画，立即隐藏，防止空中误触显示
+        if (this.state !== 'GROUND_CHARGING' && this.chargeEffectState !== 'releasing') {
+            this.chargeEffectState = 'idle';
+            this.chargeEffectSprite.setVisible(false);
+            return;
+        }
+
+        // Anchor在脚底：跟随地面弯曲/压缩后的脚位置
+        const surfaceY = this.getGroundY() + this.radius; // ground surface Y (center + radius)
+        const chargeOffsetY = (GameConfig.chargeEffect as any)?.yOffset ?? 0;
+        this.chargeEffectSprite.setPosition(this.graphics.x, surfaceY + chargeOffsetY);
+        this.chargeEffectSprite.setDepth(this.graphics.depth - 1); // Stay behind player
 
         switch (this.chargeEffectState) {
             case 'idle':
@@ -743,36 +786,85 @@ export default class Slime {
                 break;
 
             case 'charging':
-                // Advance frames 1-9 during charge phase
-                this.chargeEffectTimer += dt;
-                if (this.chargeEffectTimer >= this.CHARGE_FRAME_DURATION) {
-                    this.chargeEffectTimer = 0;
-                    if (this.chargeEffectFrame < 9) {
-                        this.chargeEffectFrame++;
-                        this.chargeEffectSprite.setTexture(`charge_${this.chargeEffectFrame}`);
-                    } else {
-                        // Reached frame 9, transition to holding
-                        this.chargeEffectState = 'holding';
-                    }
-                }
-                break;
-
-            case 'holding':
-                // Stay on frame 7 until release
-                // If player leaves charging state without proper release, cancel
+            case 'holding': {
+                // 火焰特效严格配合黄色区间和 Perfect 判定机制
+                // 帧1-5：按 proximity 渐进（0%→90%）
+                // 帧6：只在黄色区间（isInYellowZone）或满蓄（reachedPeak）时显示
                 if (this.state !== 'GROUND_CHARGING') {
                     this.cancelChargeEffect();
+                    break;
+                }
+                const pct = Phaser.Math.Clamp(this.chargeProximity ?? 0, 0, 1);
+                
+                // 帧1-5的阈值映射（0%→90% 对应帧1-5）
+                const upThresholds = [0, 0.50, 0.65, 0.78, 0.88]; // frame 1..5
+                const downBuffer = 0.03;
+                
+                let targetFrame = this.chargeEffectFrame || 1;
+                
+                // 帧6 严格配合黄色区间/满蓄（与角色闪黄同步）
+                const inPerfectWindow = this.isInYellowZone || this.reachedPeak;
+                
+                if (inPerfectWindow) {
+                    // 进入 Perfect 窗口 = 显示帧6
+                    targetFrame = 6;
+                } else {
+                    // 未进入 Perfect 窗口：按 proximity 映射到帧1-5
+                    for (let f = 1; f <= 5; f++) {
+                        if (pct >= upThresholds[f - 1]) {
+                            targetFrame = f;
+                        }
+                    }
+                    // 降级滞回，避免抖动
+                    const currIdx = Math.max(1, Math.min(this.chargeEffectFrame || 1, 5)) - 1;
+                    if (pct < upThresholds[currIdx] - downBuffer && currIdx > 0) {
+                        for (let f = 5; f >= 1; f--) {
+                            if (pct >= upThresholds[f - 1] - downBuffer) {
+                                targetFrame = f;
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                if (targetFrame !== this.chargeEffectFrame) {
+                    this.chargeEffectFrame = targetFrame;
+                    this.chargeEffectSprite.setTexture(`chargeup_${this.chargeEffectFrame}`);
+                }
+
+                // Scale/alpha 平滑插值
+                const baseScale = 3;
+                const grow = 1 + 0.28 * pct * pct;
+                let targetScale = baseScale * grow;
+                
+                // Perfect 窗口内加脉冲效果（与角色闪黄同步）
+                if (inPerfectWindow) {
+                    const pulse = 1 + 0.08 * Math.sin(this.scene.time.now * 0.025);
+                    targetScale *= pulse;
+                }
+                const targetAlpha = 0.55 + 0.45 * pct;
+
+                // Lerp 让动画更顺滑
+                this.chargeEffectDisplayScale = Phaser.Math.Linear(this.chargeEffectDisplayScale, targetScale, 0.35);
+                this.chargeEffectDisplayAlpha = Phaser.Math.Linear(this.chargeEffectDisplayAlpha, targetAlpha, 0.35);
+                this.chargeEffectSprite.setScale(this.chargeEffectDisplayScale);
+                this.chargeEffectSprite.setAlpha(this.chargeEffectDisplayAlpha);
+                
+                // Lock into holding when满蓄
+                if (this.reachedPeak) {
+                    this.chargeEffectState = 'holding';
                 }
                 break;
+            }
 
             case 'releasing':
-                // Play remaining frames 10-14
+                // Play frames 7-11 on release
                 this.chargeEffectTimer += dt;
                 if (this.chargeEffectTimer >= this.RELEASE_FRAME_DURATION) {
                     this.chargeEffectTimer = 0;
-                    if (this.chargeEffectFrame < 14) {
+                    if (this.chargeEffectFrame < this.RELEASE_END_FRAME) {
                         this.chargeEffectFrame++;
-                        this.chargeEffectSprite.setTexture(`charge_${this.chargeEffectFrame}`);
+                        this.chargeEffectSprite.setTexture(`chargeup_${this.chargeEffectFrame}`);
                     } else {
                         // Animation complete
                         this.chargeEffectState = 'idle';
@@ -780,6 +872,118 @@ export default class Slime {
                     }
                 }
                 break;
+        }
+    }
+
+    /**
+     * 空中撞怪的DEBUFF入口
+     * A01: 中毒I (+1s, tick 1hp/s, 上限5s)
+     * A02: 中毒II (+1s, tick 2hp/s, 上限5s)
+     * CloudA: 上升速度减缓（一次性压缩当前上升速度）
+     */
+    public applyDebuffFromMonster(monsterType: MonsterType): void {
+        // 如果刚击杀过怪物窗口内，直接忽略debuff（砍到必然接触）
+        const nowMs = this.scene.time.now;
+        if (this.hasRecentHitWindow(nowMs)) return;
+
+        switch (monsterType) {
+            case 'A01':
+                this.poison1Duration = Math.min(5, this.poison1Duration + 1);
+                break;
+            case 'A02':
+                this.poison2Duration = Math.min(5, this.poison2Duration + 1);
+                break;
+            case 'CloudA': {
+                // 改为“沿当前运动方向减速”，不再模拟按下SPACE
+                // 统一对当前速度做阻尼，避免从上方撞到时反而加速
+                const damp = 0.6; // 保留40%速度
+                this.vy *= damp;
+                this.slowImpulseTimer = 0.4; // 短提示
+                break;
+            }
+            default:
+                break;
+        }
+    }
+
+    /**
+     * 每帧驱动DEBUFF（伤害tick / 计时衰减）
+     */
+    private updateDebuffs(dt: number): void {
+        // 提前终止：无毒无减速
+        if (this.poison1Duration <= 0 && this.poison2Duration <= 0 && this.slowImpulseTimer <= 0) return;
+
+        // 计时衰减
+        if (this.poison1Duration > 0) this.poison1Duration = Math.max(0, this.poison1Duration - dt);
+        if (this.poison2Duration > 0) this.poison2Duration = Math.max(0, this.poison2Duration - dt);
+        if (this.slowImpulseTimer > 0) this.slowImpulseTimer = Math.max(0, this.slowImpulseTimer - dt);
+
+        // 中毒伤害tick：每秒一次
+        const hasPoison = (this.poison1Duration > 0) || (this.poison2Duration > 0);
+        if (!hasPoison) {
+            this.poisonTickTimer = 0;
+            return;
+        }
+
+        this.poisonTickTimer += dt;
+        while (this.poisonTickTimer >= 1.0) {
+            this.poisonTickTimer -= 1.0;
+            const dmg = (this.poison1Duration > 0 ? 1 : 0) + (this.poison2Duration > 0 ? 2 : 0);
+            if (dmg > 0 && this.healthManager && !(this.healthManager as any).isInfiniteHealth) {
+                this.healthManager.takeDamage(dmg);
+            }
+        }
+
+        // 懒清理 recentKilledIds：超过1秒的直接清掉，避免集合无限增长
+        if (this.recentKilledIds.size > 0 && this.recentHitTimestamp > 0) {
+            const nowEstimate = this.scene.time.now;
+            if (nowEstimate - this.recentHitTimestamp > 1000) {
+                this.recentKilledIds.clear();
+            }
+        }
+    }
+
+    // 攻击击杀后给予短暂无敌，避免同帧撞怪触发debuff
+    public addDebuffGrace(durationMs: number, nowMs: number): void {
+        this.debuffGraceUntil = Math.max(this.debuffGraceUntil, nowMs + durationMs);
+    }
+
+    public hasDebuffGrace(nowMs: number): boolean {
+        return nowMs <= this.debuffGraceUntil;
+    }
+
+    // 砍中怪物后给予短暂无负面（砍到必定接触）
+    public addRecentHitGrace(durationMs: number, nowMs: number): void {
+        this.recentHitGraceUntil = Math.max(this.recentHitGraceUntil, nowMs + durationMs);
+        this.recentHitTimestamp = nowMs;
+    }
+
+    public hasRecentHitGrace(nowMs: number): boolean {
+        return nowMs <= this.recentHitGraceUntil;
+    }
+
+    public addSwingGrace(durationMs: number, nowMs: number): void {
+        this.swingGraceUntil = Math.max(this.swingGraceUntil, nowMs + durationMs);
+    }
+
+    public hasSwingGrace(nowMs: number): boolean {
+        return nowMs <= this.swingGraceUntil;
+    }
+
+    public addRecentKill(monsterId: number, nowMs: number): void {
+        this.recentKilledIds.add(monsterId);
+        this.recentHitTimestamp = nowMs;
+        // 记录一个适度的时间窗口后清理（懒清理即可）
+    }
+
+    public hasRecentHitWindow(nowMs: number, windowMs: number = 250): boolean {
+        return (nowMs - this.recentHitTimestamp) <= windowMs;
+    }
+
+    public clearOldKills(nowMs: number): void {
+        if (this.recentKilledIds.size === 0) return;
+        if (nowMs - this.recentHitTimestamp > 1000) {
+            this.recentKilledIds.clear();
         }
     }
 }

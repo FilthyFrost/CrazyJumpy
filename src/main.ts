@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import MainMenuScene from './scenes/MainMenuScene';
 import GameScene from './scenes/GameScene';
 
 // Mobile portrait mode configuration
@@ -7,7 +8,7 @@ import GameScene from './scenes/GameScene';
 const config: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,
   parent: 'app',
-  backgroundColor: '#87CEEB',  // Sky blue background
+  backgroundColor: '#1a1a2e',  // Dark background for menu
 
   // Fixed portrait dimensions for mobile (540x960)
   scale: {
@@ -33,7 +34,7 @@ const config: Phaser.Types.Core.GameConfig = {
       debug: false
     }
   },
-  scene: [GameScene],
+  scene: [MainMenuScene, GameScene],  // MainMenuScene 作为第一个场景
   fps: {
     target: 60,
     // 使用 requestAnimationFrame (默认) 而非 setTimeout，性能更好

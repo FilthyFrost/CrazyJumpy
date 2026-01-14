@@ -10,7 +10,7 @@
 import Phaser from 'phaser';
 import { GameConfig } from '../config';
 
-export type MonsterType = 'A01' | 'A02' | 'A03';
+export type MonsterType = 'A01' | 'A02' | 'A03' | 'CloudA';
 
 export interface MonsterConfig {
     type: MonsterType;
@@ -21,8 +21,11 @@ export interface MonsterConfig {
 }
 
 export class Monster {
+    private static NEXT_ID = 1;
+
     public scene: Phaser.Scene;
     public sprite: Phaser.GameObjects.Sprite;
+    public id: number;
 
     // 位置和状态
     public x: number;
@@ -30,6 +33,10 @@ export class Monster {
     public heightMeters: number;
     public type: MonsterType;
     public isAlive: boolean = true;
+    // Debuff判定节流，避免同一帧/连续帧重复触发
+    public nextDebuffTime: number = 0;
+    // 被击杀后短暂忽略debuff检测（保险）
+    public noDebuffUntil: number = 0;
 
     // 通道系统
     public currentLane: number = 1;  // 0=左, 1=中, 2=右 (创建时固定，不会改变)
@@ -43,6 +50,7 @@ export class Monster {
 
     constructor(scene: Phaser.Scene, config: MonsterConfig, screenWidth: number) {
         this.scene = scene;
+        this.id = Monster.NEXT_ID++;
         this.x = config.x;
         this.y = config.y;
         this.heightMeters = config.heightMeters;
@@ -59,6 +67,7 @@ export class Monster {
         switch (this.type) {
             case 'A02': textureKey = 'monster_a02_right_1'; break;
             case 'A03': textureKey = 'monster_a03_right_1'; break;
+            case 'CloudA': textureKey = 'monster_clouda_right_1'; break;
             default:    textureKey = 'monster_a01_right_1'; break;
         }
         this.sprite = scene.add.sprite(this.x, this.y, textureKey)
@@ -93,6 +102,11 @@ export class Monster {
                 return {
                     size: GameConfig.monster.a03?.size ?? 48,
                     frameRate: GameConfig.monster.a03?.frameRate ?? 8,
+                };
+            case 'CloudA':
+                return {
+                    size: GameConfig.monster.cloudA?.size ?? 52,
+                    frameRate: GameConfig.monster.cloudA?.frameRate ?? 10,
                 };
             case 'A01':
             default:
@@ -167,7 +181,17 @@ export class Monster {
         this.moveDirection = this.moveDirection === 1 ? -1 : 1;
         this.updateMoveSpeed();
         this.scheduleDirectionChange();
-        this.playDirectionAnimation();
+        // CloudA 使用中间过渡帧，避免左右切换过于生硬
+        if (this.type === 'CloudA') {
+            this.sprite.setTexture('monster_clouda_middle');
+            // 短暂展示后再切换到新方向动画
+            this.scene.time.delayedCall(80, () => {
+                if (!this.isAlive) return;
+                this.playDirectionAnimation();
+            });
+        } else {
+            this.playDirectionAnimation();
+        }
     }
 
     /**
@@ -189,6 +213,7 @@ export class Monster {
         switch (this.type) {
             case 'A02': prefix = 'monster_a02'; break;
             case 'A03': prefix = 'monster_a03'; break;
+            case 'CloudA': prefix = 'monster_clouda'; break;
             default:    prefix = 'monster_a01'; break;
         }
         const animKey = this.moveDirection === 1 ? `${prefix}_right` : `${prefix}_left`;

@@ -9,6 +9,8 @@ import { MonsterManager } from '../objects/MonsterManager';
 import { BulletTimeManager } from '../managers/BulletTimeManager';
 import { BulletTimeHourglass } from '../ui/BulletTimeHourglass';
 import { PickupManager } from '../objects/PickupManager';
+import { InventoryManager } from '../managers/InventoryManager';
+import { BackpackUI } from '../ui/BackpackUI';
 
 export default class GameScene extends Phaser.Scene {
     private slime!: Slime;
@@ -38,13 +40,21 @@ export default class GameScene extends Phaser.Scene {
 
     // Start screen elements
     private startOverlay!: Phaser.GameObjects.Container;
-    private startButton!: Phaser.GameObjects.Text;
 
     // Milestone tracking
     private recordHeight: number = 0;  // All-time record in pixels
     private milestoneGraphics!: Phaser.GameObjects.Graphics;
     private milestoneText!: Phaser.GameObjects.Text;
     private pixelsPerMeter: number = 50;
+
+    // Debuff UI
+    private debuffTexts: Phaser.GameObjects.Text[] = [];
+
+    // Inventory / Backpack
+    private inventoryManager!: InventoryManager;
+    private backpackUI!: BackpackUI;
+    private isPausedForBackpack: boolean = false;
+    private backpackKey?: Phaser.Input.Keyboard.Key;
 
     // Height-driven gradient background system
     private skyGradient!: SkyGradientLUT;
@@ -56,6 +66,7 @@ export default class GameScene extends Phaser.Scene {
     private gameOverOverlay?: Phaser.GameObjects.Container;
     private isGameOver: boolean = false;
     private isPlayingDeathAnimation: boolean = false;
+    private isTestMode: boolean = false;
 
 
 
@@ -145,13 +156,30 @@ export default class GameScene extends Phaser.Scene {
             this.load.image(`monster_a03_right_${i}`, `assets/Monsters/Monster A03/BatH_right_${frameNum}.png`);
         }
 
+        // Load Monster CloudA (Cloud) animation frames
+        for (let i = 1; i <= 4; i++) {
+            const frameNum = String(i).padStart(2, '0');
+            this.load.image(`monster_clouda_left_${i}`, `assets/Monsters/Monster CloudA/LEFT/CloudA_frame_${frameNum}.png`);
+        }
+        // Middle transition frame (turning)
+        this.load.image('monster_clouda_middle', 'assets/Monsters/Monster CloudA/MIDDLE/CloudA_frame_05.png');
+        // Skip frame_05 (front/middle) for now; use right-facing frames 06-09
+        for (let i = 6; i <= 9; i++) {
+            const frameNum = String(i).padStart(2, '0');
+            const rightIndex = i - 5; // 1..4 for animation keys
+            this.load.image(`monster_clouda_right_${rightIndex}`, `assets/Monsters/Monster CloudA/RIGHT/CloudA_frame_${frameNum}.png`);
+        }
+
+        // Backpack icon and inventory grid background
+        this.load.image('backpack_icon', 'assets/ui/Backpack.png');
+        this.load.image('inventory_bg', 'assets/ui/Inventory.png');
+
         // Load Bullet Time icon
         this.load.image('bt_icon', 'assets/ui/bt_icon.png');
 
-        // Load Charge Effect frames (14 frames)
-        for (let i = 1; i <= 14; i++) {
-            const frameNum = String(i).padStart(2, '0');
-            this.load.image(`charge_${i}`, `assets/effects/charge/Bubble_frame_${frameNum}.png`);
+        // Load Charge Up effect frames (1-6 charging, 7-11 release)
+        for (let i = 1; i <= 11; i++) {
+            this.load.image(`chargeup_${i}`, `assets/effects/ChargingUp Animation/ChargingUp_frame_${String(i).padStart(2, '0')}.png`);
         }
 
         // Load Pickup items
@@ -163,6 +191,9 @@ export default class GameScene extends Phaser.Scene {
     create() {
         const { width, height } = this.scale;
         const groundY = height * 0.8;
+
+        // 从主菜单过渡的淡入效果
+        this.cameras.main.fadeIn(300, 0, 0, 0);
 
         // ===== RESET STATE ON SCENE RESTART =====
         this.isGameOver = false;
@@ -411,6 +442,28 @@ export default class GameScene extends Phaser.Scene {
             });
         }
 
+        // Monster CloudA - Left/Right animations
+        if (this.textures.exists('monster_clouda_left_1')) {
+            this.anims.create({
+                key: 'monster_clouda_left',
+                frames: [
+                    { key: 'monster_clouda_left_1' }, { key: 'monster_clouda_left_2' },
+                    { key: 'monster_clouda_left_3' }, { key: 'monster_clouda_left_4' }
+                ],
+                frameRate: GameConfig.monster.cloudA?.frameRate ?? 10,
+                repeat: -1
+            });
+            this.anims.create({
+                key: 'monster_clouda_right',
+                frames: [
+                    { key: 'monster_clouda_right_1' }, { key: 'monster_clouda_right_2' },
+                    { key: 'monster_clouda_right_3' }, { key: 'monster_clouda_right_4' }
+                ],
+                frameRate: GameConfig.monster.cloudA?.frameRate ?? 10,
+                repeat: -1
+            });
+        }
+
         // 1. Create Ground
         this.ground = new Ground(this, groundY);
 
@@ -428,7 +481,12 @@ export default class GameScene extends Phaser.Scene {
         // 3b. Initialize Pickup Manager
         this.pickupManager = new PickupManager(this);
 
-        // 3c. Initialize Monster Manager
+        // 3c. Inventory & Backpack
+        this.inventoryManager = new InventoryManager();
+        this.pickupManager.setInventoryManager(this.inventoryManager);
+        this.inventoryManager.setPickupManager(this.pickupManager);
+
+        // 3d. Initialize Monster Manager
         this.monsterManager = new MonsterManager(this, width, groundY, this.pixelsPerMeter);
         this.monsterManager.setPickupManager(this.pickupManager);
         this.monsterManager.spawnInitialMonsters();
@@ -441,29 +499,40 @@ export default class GameScene extends Phaser.Scene {
         this.input.keyboard?.on('keydown-A', () => {
             if (this.slime.state === 'AIRBORNE' && !this.slime.laneSwitchLocked) {
                 this.slime.requestLaneChange(-1, (dir, x, y) => {
-                    this.monsterManager.checkSectorCollision(dir, x, y);
+                    this.monsterManager.checkSectorCollision(dir, x, y, this.slime, this.time.now);
                 });
             }
         });
         this.input.keyboard?.on('keydown-D', () => {
             if (this.slime.state === 'AIRBORNE' && !this.slime.laneSwitchLocked) {
                 this.slime.requestLaneChange(1, (dir, x, y) => {
-                    this.monsterManager.checkSectorCollision(dir, x, y);
+                    this.monsterManager.checkSectorCollision(dir, x, y, this.slime, this.time.now);
                 });
             }
         });
 
+        // 4c. Backpack key
+        this.backpackKey = this.input.keyboard?.addKey(Phaser.Input.Keyboard.KeyCodes.B);
+
         // 5. Input - Touch with gesture tracking (for mobile)
         this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+            // 背包打开时 或 冷却期内，不处理游戏输入
+            if (this.shouldBlockGameInput()) {
+                return;
+            }
             this.pointerDownCount++;
             this.gestureManager.onPointerDown(pointer.id, pointer.x, pointer.y, this.time.now);
         });
 
         this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
+            if (this.shouldBlockGameInput()) return;
             this.gestureManager.onPointerMove(pointer.id, pointer.x, pointer.y);
         });
 
         this.input.on('pointerup', (pointer: Phaser.Input.Pointer) => {
+            if (this.shouldBlockGameInput()) {
+                return;
+            }
             this.pointerDownCount--;
             this.gestureManager.onPointerUp(pointer.id);
             if (this.pointerDownCount <= 0) {
@@ -473,6 +542,7 @@ export default class GameScene extends Phaser.Scene {
 
         // 6. Input Safety - Prevent stuck input on mobile/browser edge cases
         this.input.on('pointerupoutside', (pointer: Phaser.Input.Pointer) => {
+            if (this.shouldBlockGameInput()) return;
             this.pointerDownCount--;
             this.gestureManager.onPointerUp(pointer.id);
             if (this.pointerDownCount <= 0) {
@@ -480,6 +550,7 @@ export default class GameScene extends Phaser.Scene {
             }
         });
         this.input.on('pointercancel', () => {
+            if (this.shouldBlockGameInput()) return;
             this.pointerDownCount = 0;
             this.gestureManager.clearAll();
         });
@@ -513,6 +584,18 @@ export default class GameScene extends Phaser.Scene {
             strokeThickness: Math.max(3, heightFontSize * 0.1)
         }).setOrigin(0.5, 0).setDepth(200).setVisible(false); // Hidden until game starts
 
+        // Debuff文本初始化（最多3个位置，居中/左右分布）
+        this.debuffTexts = [0, 1, 2].map(() =>
+            this.add.text(0, 0, '', {
+                fontSize: '24px',
+                fontFamily: 'Arial',
+                fontStyle: 'bold',
+                color: '#ffcc00',
+                stroke: '#000000',
+                strokeThickness: 4
+            }).setOrigin(0.5).setDepth(201).setVisible(false)
+        );
+
         // Milestone Graphics (draws in world space)
         this.milestoneGraphics = this.add.graphics();
         // Dynamic milestone font: 5% of width
@@ -524,6 +607,12 @@ export default class GameScene extends Phaser.Scene {
             stroke: '#000000',
             strokeThickness: 4
         }).setDepth(50);
+
+        // Backpack UI (4x4 网格)
+        this.backpackUI = new BackpackUI(this, this.inventoryManager);
+        this.backpackUI.onOpen(() => this.pauseForBackpack());
+        this.backpackUI.onClose(() => this.resumeFromBackpack());
+        this.input.keyboard?.on('keydown-B', () => this.toggleBackpack());
 
         // ===== START SCREEN OVERLAY =====
         this.createStartScreen(width, height);
@@ -592,38 +681,16 @@ export default class GameScene extends Phaser.Scene {
         }
 
         // 3. Start Screen: Relative to Safe Frame
+        // 注意：新的像素风格 UI 设计已经自包含响应式逻辑，这里只处理背景遮罩
         if (this.startOverlay && this.startOverlay.active) {
-            // Resize overlay background to full screen
-            const bg = this.startOverlay.getAt(0) as Phaser.GameObjects.Rectangle;
-            if (bg) {
+            // Resize overlay background to full screen (第一个元素是 Rectangle 遮罩)
+            const bg = this.startOverlay.getAt(0);
+            if (bg && bg instanceof Phaser.GameObjects.Rectangle) {
                 bg.setPosition(width / 2, height / 2);
                 bg.setSize(width, height);
             }
-
-            // Title (25% from top of safe frame)
-            const title = this.startOverlay.getAt(1) as Phaser.GameObjects.Text;
-            if (title) {
-                const tSize = Math.floor(sf.width * 0.15);
-                title.setFontSize(tSize);
-                title.setStroke('#000000', Math.max(4, tSize * 0.1));
-                title.setPosition(width / 2, sf.y + sf.height * 0.25);
-            }
-
-            // Instructions (45% from top)
-            const instr = this.startOverlay.getAt(2) as Phaser.GameObjects.Text;
-            if (instr) {
-                const iSize = Math.max(16, Math.floor(sf.width * 0.045));
-                instr.setFontSize(iSize);
-                instr.setWordWrapWidth(sf.width * 0.9);
-                instr.setPosition(width / 2, sf.y + sf.height * 0.45);
-            }
-
-            // Button (75% from top)
-            if (this.startButton) {
-                const bSize = Math.floor(sf.width * 0.1);
-                this.startButton.setFontSize(bSize);
-                this.startButton.setPosition(width / 2, sf.y + sf.height * 0.75);
-            }
+            // 其他元素（按钮等）已经在 createStartScreen 中使用固定位置创建
+            // 不再需要动态调整，因为使用了新的像素风格 UI
         }
 
         // 4. Milestone: Safe width scaling
@@ -639,70 +706,254 @@ export default class GameScene extends Phaser.Scene {
     }
 
     private createStartScreen(width: number, height: number) {
-        // Dark overlay
-        const overlay = this.add.rectangle(width / 2, height / 2, width, height, 0x000000, 0.7)
+        // 半透明深色遮罩
+        const overlay = this.add.rectangle(width / 2, height / 2, width, height, 0x0a0a15, 0.85)
             .setScrollFactor(0);
 
-        // Title - Initial placeholders (will be resized by applyResponsiveLayout)
-        const title = this.add.text(width / 2, height * 0.3, '🟢 Slime Jump 🟢', {
-            fontSize: '64px',
-            fontFamily: 'Arial',
-            fontStyle: 'bold',
-            color: '#00ff00',
-            stroke: '#000000',
-            strokeThickness: 8
-        }).setOrigin(0.5).setScrollFactor(0);
+        // 装饰性边框
+        const border = this.add.graphics().setScrollFactor(0);
+        const borderPadding = 40;
+        border.lineStyle(4, 0x4a3828, 1);
+        border.strokeRect(borderPadding, borderPadding, width - borderPadding * 2, height - borderPadding * 2);
+        border.lineStyle(2, 0x7c5a3a, 0.6);
+        border.strokeRect(borderPadding + 6, borderPadding + 6, width - borderPadding * 2 - 12, height - borderPadding * 2 - 12);
 
-        // Instructions
-        const instructions = this.add.text(width / 2, height * 0.5,
-            '按住屏幕 或 SPACE 快速下落\n在黄色状态松开 = PERFECT\n连续 3 次 PERFECT = 2x 力量!', {
+        // 顶部装饰横条
+        const topBar = this.add.graphics().setScrollFactor(0);
+        topBar.fillStyle(0x3d2817, 1);
+        topBar.fillRect(60, 80, width - 120, 8);
+        topBar.fillStyle(0x5c4033, 1);
+        topBar.fillRect(60, 82, width - 120, 3);
+
+        // 像素风格标题
+        const titleShadow = this.add.text(width / 2 + 4, height * 0.18 + 4, 'CRAZY JUMPY', {
+            fontFamily: '"Press Start 2P", "Courier New", monospace',
             fontSize: '32px',
-            fontFamily: 'Arial',
-            color: '#ffffff',
-            align: 'center',
-            lineSpacing: 10
+            color: '#1a2e12'
         }).setOrigin(0.5).setScrollFactor(0);
 
-        // Start Button
-        this.startButton = this.add.text(width / 2, height * 0.75, '[ 点击开始 ]', {
-            fontSize: '48px',
-            fontFamily: 'Arial',
-            fontStyle: 'bold',
-            color: '#ffff00',
-            stroke: '#000000',
-            strokeThickness: 6
-        }).setOrigin(0.5).setScrollFactor(0).setInteractive({ useHandCursor: true });
+        const title = this.add.text(width / 2, height * 0.18, 'CRAZY JUMPY', {
+            fontFamily: '"Press Start 2P", "Courier New", monospace',
+            fontSize: '32px',
+            color: '#7cba5f',
+            stroke: '#2d4a1c',
+            strokeThickness: 4
+        }).setOrigin(0.5).setScrollFactor(0);
 
-        // Hover effect
-        this.startButton.on('pointerover', () => {
-            this.startButton.setScale(1.1);
-            this.startButton.setColor('#ffffff');
-        });
-        this.startButton.on('pointerout', () => {
-            this.startButton.setScale(1.0);
-            this.startButton.setColor('#ffff00');
-        });
-
-        // Click to start
-        this.startButton.on('pointerdown', () => {
-            this.startGame();
+        // 标题呼吸动画
+        this.tweens.add({
+            targets: [title, titleShadow],
+            scaleX: 1.03,
+            scaleY: 1.03,
+            duration: 1200,
+            yoyo: true,
+            repeat: -1,
+            ease: 'Sine.easeInOut'
         });
 
-        // Also allow space to start
+        // 说明面板背景
+        const instructionBg = this.add.graphics().setScrollFactor(0);
+        instructionBg.fillStyle(0x1a1a2e, 0.9);
+        instructionBg.fillRoundedRect(width / 2 - 200, height * 0.28, 400, 160, 12);
+        instructionBg.lineStyle(2, 0x4a4a6a, 0.8);
+        instructionBg.strokeRoundedRect(width / 2 - 200, height * 0.28, 400, 160, 12);
+
+        // 操作说明
+        const instructionTitle = this.add.text(width / 2, height * 0.32, '◆ 操作指南 ◆', {
+            fontFamily: '"Microsoft YaHei", sans-serif',
+            fontSize: '18px',
+            color: '#8fd464',
+            fontStyle: 'bold'
+        }).setOrigin(0.5).setScrollFactor(0);
+
+        const instructions = this.add.text(width / 2, height * 0.42,
+            '按住屏幕/SPACE → 快速下落\n黄色闪烁时松开 → PERFECT\n连续3次PERFECT → 2倍力量!', {
+            fontFamily: '"Microsoft YaHei", sans-serif',
+            fontSize: '16px',
+            color: '#cccccc',
+            align: 'center',
+            lineSpacing: 12
+        }).setOrigin(0.5).setScrollFactor(0);
+
+        // 开始按钮 - 木质风格
+        const startBtnContainer = this.createPixelButton(
+            width / 2, height * 0.58, 260, 60,
+            '▶  开始游戏', 
+            () => this.startGame(false)
+        );
+
+        // 测试模式按钮 - 较小的样式
+        const testBtnContainer = this.createPixelButton(
+            width / 2, height * 0.68, 260, 50,
+            '⚙  测试模式',
+            () => this.startGame(true),
+            true // isSecondary
+        );
+
+        // 提示文字
+        const hint = this.add.text(width / 2, height * 0.76, '测试模式：无限血 / 初始100m', {
+            fontFamily: '"Microsoft YaHei", sans-serif',
+            fontSize: '12px',
+            color: '#6a6a8a'
+        }).setOrigin(0.5).setScrollFactor(0);
+
+        // 底部装饰
+        const bottomDecor = this.add.graphics().setScrollFactor(0);
+        bottomDecor.fillStyle(0x3d2817, 1);
+        bottomDecor.fillRect(60, height - 88, width - 120, 8);
+        bottomDecor.fillStyle(0x5c4033, 1);
+        bottomDecor.fillRect(60, height - 86, width - 120, 3);
+
+        // 空格键也可以开始
         this.input.keyboard?.once('keydown-SPACE', () => {
             if (!this.gameStarted) {
-                this.startGame();
+                this.startGame(false);
             }
         });
 
         // Store in container
-        this.startOverlay = this.add.container(0, 0, [overlay, title, instructions, this.startButton]);
+        this.startOverlay = this.add.container(0, 0, [
+            overlay, border, topBar, bottomDecor,
+            titleShadow, title,
+            instructionBg, instructionTitle, instructions,
+            startBtnContainer, testBtnContainer, hint
+        ]);
         this.startOverlay.setDepth(1000);
+
+        // 入场动画
+        this.startOverlay.setAlpha(0);
+        this.tweens.add({
+            targets: this.startOverlay,
+            alpha: 1,
+            duration: 400,
+            ease: 'Quad.easeOut'
+        });
     }
 
-    private startGame() {
+    /**
+     * 创建像素风格按钮
+     */
+    private createPixelButton(
+        x: number, y: number, 
+        btnWidth: number, btnHeight: number,
+        text: string,
+        onClick: () => void,
+        isSecondary: boolean = false
+    ): Phaser.GameObjects.Container {
+        const container = this.add.container(x, y).setScrollFactor(0);
+
+        // 按钮阴影
+        const shadow = this.add.graphics();
+        shadow.fillStyle(0x1a0f05, 0.7);
+        shadow.fillRoundedRect(-btnWidth/2 + 4, -btnHeight/2 + 4, btnWidth, btnHeight, 8);
+        container.add(shadow);
+
+        // 按钮主体
+        const btnBg = this.add.graphics();
+        const mainColor = isSecondary ? 0x4a4a6a : 0x8b5a2b;
+        const lightColor = isSecondary ? 0x6a6a8a : 0xa67c52;
+        const darkColor = isSecondary ? 0x2a2a4a : 0x6b4423;
+        const borderColor = isSecondary ? 0x3a3a5a : 0x4a3219;
+        const innerBorderColor = isSecondary ? 0x7a7a9a : 0xc4956a;
+
+        // 主体填充
+        btnBg.fillStyle(mainColor, 1);
+        btnBg.fillRoundedRect(-btnWidth/2, -btnHeight/2, btnWidth, btnHeight, 8);
+        
+        // 高光（顶部）
+        btnBg.fillStyle(lightColor, 1);
+        btnBg.fillRoundedRect(-btnWidth/2 + 4, -btnHeight/2 + 4, btnWidth - 8, btnHeight/3, 6);
+        
+        // 暗部（底部）
+        btnBg.fillStyle(darkColor, 1);
+        btnBg.fillRoundedRect(-btnWidth/2 + 4, btnHeight/6, btnWidth - 8, btnHeight/3, 6);
+        
+        // 边框
+        btnBg.lineStyle(3, borderColor, 1);
+        btnBg.strokeRoundedRect(-btnWidth/2, -btnHeight/2, btnWidth, btnHeight, 8);
+        
+        // 内边框高光
+        btnBg.lineStyle(1, innerBorderColor, 0.4);
+        btnBg.strokeRoundedRect(-btnWidth/2 + 3, -btnHeight/2 + 3, btnWidth - 6, btnHeight - 6, 6);
+        
+        container.add(btnBg);
+
+        // 左右装饰钉
+        const addNail = (nx: number, ny: number) => {
+            const nail = this.add.graphics();
+            nail.fillStyle(0x2a1a0a, 0.5);
+            nail.fillCircle(nx + 1, ny + 1, 5);
+            nail.fillStyle(isSecondary ? 0x5a5a7a : 0x5c4033, 1);
+            nail.fillCircle(nx, ny, 5);
+            nail.fillStyle(isSecondary ? 0x8a8aaa : 0x8b7355, 1);
+            nail.fillCircle(nx - 1.5, ny - 1.5, 2);
+            container.add(nail);
+        };
+        addNail(-btnWidth/2 + 14, 0);
+        addNail(btnWidth/2 - 14, 0);
+
+        // 按钮文字
+        const textColor = isSecondary ? '#aaaacc' : '#3d2817';
+        const btnText = this.add.text(0, 0, text, {
+            fontFamily: '"Microsoft YaHei", sans-serif',
+            fontSize: isSecondary ? '16px' : '20px',
+            fontStyle: 'bold',
+            color: textColor
+        }).setOrigin(0.5);
+        container.add(btnText);
+
+        // 交互区域
+        const hitArea = this.add.rectangle(0, 0, btnWidth, btnHeight, 0xffffff, 0);
+        hitArea.setInteractive({ useHandCursor: true });
+        container.add(hitArea);
+
+        // 悬停效果
+        hitArea.on('pointerover', () => {
+            this.tweens.add({
+                targets: container,
+                scaleX: 1.05,
+                scaleY: 1.05,
+                duration: 80,
+                ease: 'Quad.easeOut'
+            });
+            btnText.setColor(isSecondary ? '#ffffff' : '#1a0f05');
+        });
+
+        hitArea.on('pointerout', () => {
+            this.tweens.add({
+                targets: container,
+                scaleX: 1,
+                scaleY: 1,
+                duration: 80,
+                ease: 'Quad.easeOut'
+            });
+            btnText.setColor(textColor);
+        });
+
+        // 点击效果 - 立即调用回调，动画只是视觉反馈
+        hitArea.on('pointerdown', () => {
+            // 立即调用回调，不等待动画
+            onClick();
+            // 视觉反馈动画
+            this.tweens.add({
+                targets: container,
+                scaleX: 0.95,
+                scaleY: 0.95,
+                duration: 50,
+                yoyo: true,
+                ease: 'Quad.easeInOut'
+            });
+        });
+
+        return container;
+    }
+
+    private startGame(isTestMode: boolean = false) {
+        this.isTestMode = isTestMode;
         this.gameStarted = true;
         this.startOverlay.destroy();
+        this.isPausedForBackpack = false;
+        this.backpackUI.hide();
 
         // Show UI elements that were hidden during start screen
         this.heightText.setVisible(true);
@@ -714,6 +965,60 @@ export default class GameScene extends Phaser.Scene {
         // Start camera transition
         this.isCameraTransitioning = true;
         this.cameraTransitionStartTime = this.time.now;
+
+        // Apply test mode overrides (无限血仅在测试模式)
+        if (this.slime && this.slime.healthManager) {
+            this.slime.healthManager.setInvincible(this.isTestMode);
+        }
+        
+        // 两种模式都启用初始100m跳跃，方便测试
+        const initPx = 100 * this.pixelsPerMeter;
+        this.slime.lastApexHeight = initPx;
+        this.slime.landingApexHeight = initPx;
+        this.slime.landingFallDistance = initPx;
+        this.slime.landingFastFallDistance = initPx;
+        this.slime.pendingTestJumpHeightPx = initPx; // 初次起跳强制 100m
+        this.recordHeight = Math.max(this.recordHeight, initPx);
+
+        // 清空背包 & 掉落物计数
+        this.inventoryManager.clear();
+        this.pickupManager.reset();
+    }
+
+    /** 检查是否应该阻止游戏输入 */
+    private shouldBlockGameInput(): boolean {
+        // 背包打开时阻止
+        if (this.isPausedForBackpack) return true;
+        // 背包关闭后的冷却期内阻止
+        if (this.backpackUI && this.backpackUI.isInCooldown()) return true;
+        return false;
+    }
+
+    private pauseForBackpack() {
+        if (this.isPausedForBackpack) return;
+        this.isPausedForBackpack = true;
+        this.isSpaceDown = false;
+        this.pointerDownCount = 0;
+        this.gestureManager.clearAll();
+    }
+
+    private resumeFromBackpack() {
+        if (!this.isPausedForBackpack) return;
+        this.isPausedForBackpack = false;
+        // 清除输入状态，防止残留
+        this.isSpaceDown = false;
+        this.pointerDownCount = 0;
+        this.gestureManager.clearAll();
+    }
+
+    private toggleBackpack() {
+        if (this.backpackUI.isShown()) {
+            this.backpackUI.hide();
+            this.resumeFromBackpack();
+        } else {
+            this.backpackUI.show();
+            this.pauseForBackpack();
+        }
     }
 
     update(_time: number, delta: number) {
@@ -722,8 +1027,22 @@ export default class GameScene extends Phaser.Scene {
             return;
         }
 
-        // Don't update if game is over
+        // Backpack toggle (B key)
+        if (Phaser.Input.Keyboard.JustDown(this.backpackKey!)) {
+            this.toggleBackpack();
+        }
+
+        // If paused by backpack: 只更新背包UI/布局，跳过物理
+        if (this.isPausedForBackpack) {
+            this.backpackUI.refreshSlots();
+            return;
+        }
+
+        // Don't update if game is over, but still update pickups for death drops
         if (this.isGameOver) {
+            // 继续更新掉落物，让死亡喷射的物品完成落地动画
+            const dt = delta / 1000;
+            this.pickupManager.update(dt, this.slime.x, this.slime.y, 0);
             return;
         }
 
@@ -753,6 +1072,9 @@ export default class GameScene extends Phaser.Scene {
 
             // Update gradient background
             this.skyGradient.update(this.slime.y);
+
+            // 即使在死亡动画，也更新掉落物的物理/弹出，让喷散生效
+            this.pickupManager.update(dt, this.slime.x, this.slime.y, 0);
             return;
         }
 
@@ -803,7 +1125,7 @@ export default class GameScene extends Phaser.Scene {
             const direction = gesture.swipeDirection as -1 | 1;
             // Trigger lane change with collision callback (fired on attack impact frame)
             this.slime.requestLaneChange(direction, (dir, x, y) => {
-                this.monsterManager.checkSectorCollision(dir, x, y);
+                this.monsterManager.checkSectorCollision(dir, x, y, this.slime, this.time.now);
             });
         }
 
@@ -826,8 +1148,23 @@ export default class GameScene extends Phaser.Scene {
             const playerSpeed = Math.abs(this.slime.vy);
             this.pickupManager.update(simDt, this.slime.x, this.slime.y, playerSpeed);
 
-            // Check Collision (Player vs Monster) - REMOVED per user request
-            // Monsters do not kill the player.
+            // 空中撞怪：给予DEBUFF（不致死）
+            if (this.slime.state === 'AIRBORNE'
+                && !this.slime.hasDebuffGrace(this.time.now)
+                && !this.slime.hasRecentHitGrace(this.time.now)
+                && !this.slime.hasRecentHitWindow(this.time.now)
+                && !this.slime.hasSwingGrace(this.time.now)) { // 挥刀窗口内直接跳过，确保先判击杀
+                const hitType = this.monsterManager.checkDebuffCollision(
+                    this.slime.x,
+                    this.slime.y,
+                    this.slime.radius,
+                    this.time.now,
+                    this.slime
+                );
+                if (hitType) {
+                    this.slime.applyDebuffFromMonster(hitType);
+                }
+            }
 
             this.accumulator -= this.FIXED_DT; // Consume REAL time
             steps++;
@@ -915,6 +1252,9 @@ export default class GameScene extends Phaser.Scene {
         // Update Bullet Time Hourglass UI
         this.bulletTimeHourglass.update(this.slime.x, this.slime.y);
 
+        // Update Debuff UI (显示在角色与高度指示器之间)
+        this.updateDebuffUI();
+
         // ===== UPDATE GRADIENT BACKGROUND =====
         // Update background color based on player height
         this.skyGradient.update(this.slime.y);
@@ -932,9 +1272,25 @@ export default class GameScene extends Phaser.Scene {
             // Block all input immediately
             this.isPlayingDeathAnimation = true;
 
-            // Play death animation, then show game over
+            // 死亡喷出背包所有道具（同步于死亡动画开始）
+            // 传入地面Y坐标，让物品落地后静止
+            const groundY = this.ground.y;
+            const dropDuration = this.inventoryManager.dropAll(this, this.slime.x, this.slime.y, groundY);
+
+            // Play death animation
             this.slime.playDeathAnimation(() => {
-                this.showGameOver();
+                // 死亡动画播放完毕后，等待物品落地再显示游戏结束画面
+                // 如果物品落地时间比死亡动画长，需要额外等待
+                const deathAnimDuration = 1200; // 死亡动画大约1.2秒
+                const remainingWait = Math.max(0, dropDuration - deathAnimDuration);
+                
+                if (remainingWait > 0) {
+                    this.time.delayedCall(remainingWait, () => {
+                        this.showGameOver();
+                    });
+                } else {
+                    this.showGameOver();
+                }
             });
         }
     }
@@ -969,6 +1325,55 @@ export default class GameScene extends Phaser.Scene {
 
         this.milestoneText.setText(`🏆 ${meters.toFixed(0)}m`);
         this.milestoneText.setPosition(textX, lineY - 25);
+    }
+
+    /**
+     * 在角色与高度指示器之间显示DEBUFF图标/文本
+     * 布局：1个居中，2个左右分布，3个左右+中
+     */
+    private updateDebuffUI(): void {
+        if (!this.debuffTexts?.length) return;
+
+        const active: { label: string; color: string }[] = [];
+        if (this.slime.poison1Duration > 0) {
+            active.push({ label: `毒I ${this.slime.poison1Duration.toFixed(1)}s`, color: '#55ff55' });
+        }
+        if (this.slime.poison2Duration > 0) {
+            active.push({ label: `毒II ${this.slime.poison2Duration.toFixed(1)}s`, color: '#00ffff' });
+        }
+        if (this.slime.slowImpulseTimer > 0) {
+            active.push({ label: `减速`, color: '#ffcc00' });
+        }
+
+        // 无debuff直接隐藏
+        if (active.length === 0) {
+            this.debuffTexts.forEach(t => t.setVisible(false));
+            return;
+        }
+
+        // 目标Y：角色与高度文本的中点 + 少量偏移
+        const midY = (this.slime.y + (this.heightText.y + this.heightText.height * this.heightText.scaleY * 0.5)) / 2;
+        const baseY = midY + 10;
+        const centerX = this.slime.x;
+
+        // 布局偏移
+        const offsets = [
+            [0],
+            [-40, 40],
+            [-60, 0, 60],
+        ];
+
+        // 更新/重排
+        this.debuffTexts.forEach(t => t.setVisible(false));
+        const layout = offsets[Math.min(active.length, 3) - 1] ?? [];
+
+        active.slice(0, 3).forEach((item, idx) => {
+            const textObj = this.debuffTexts[idx];
+            textObj.setText(item.label);
+            textObj.setColor(item.color);
+            textObj.setPosition(centerX + layout[idx], baseY);
+            textObj.setVisible(true);
+        });
     }
 
     /**
@@ -1013,8 +1418,8 @@ export default class GameScene extends Phaser.Scene {
         }).setOrigin(0.5).setScrollFactor(0).setDepth(2001);
 
         // Restart button
-        const restartButton = this.add.text(width / 2, height * 0.7, '[ 重新开始 ]', {
-            fontSize: '48px',
+        const restartButton = this.add.text(width / 2, height * 0.65, '[ 重新开始 ]', {
+            fontSize: '42px',
             fontFamily: 'Arial',
             fontStyle: 'bold',
             color: '#00ff00',
@@ -1035,6 +1440,31 @@ export default class GameScene extends Phaser.Scene {
         // Click to restart
         restartButton.on('pointerdown', () => {
             this.scene.restart();
+        });
+
+        // Return to main menu button
+        const menuButton = this.add.text(width / 2, height * 0.78, '[ 返回主菜单 ]', {
+            fontSize: '32px',
+            fontFamily: 'Arial',
+            fontStyle: 'bold',
+            color: '#8fd464',
+            stroke: '#000000',
+            strokeThickness: 4
+        }).setOrigin(0.5).setScrollFactor(0).setDepth(2001).setInteractive({ useHandCursor: true });
+
+        menuButton.on('pointerover', () => {
+            menuButton.setScale(1.1);
+            menuButton.setColor('#aaffaa');
+        });
+        menuButton.on('pointerout', () => {
+            menuButton.setScale(1.0);
+            menuButton.setColor('#8fd464');
+        });
+        menuButton.on('pointerdown', () => {
+            this.cameras.main.fadeOut(300, 0, 0, 0);
+            this.cameras.main.once('camerafadeoutcomplete', () => {
+                this.scene.start('MainMenuScene');
+            });
         });
 
         // Also allow space to restart

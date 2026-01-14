@@ -24,7 +24,15 @@ export class IdleState implements ISlimeState {
             slime.transitionTo('AIRBORNE');
 
             // Jump upward robustly
-            slime.vy = -Math.abs(GameConfig.ground.baseLaunchVelocity);
+            // Test模式：如果有指定的初始跳跃高度，则用高度反推所需初速度
+            if (slime.pendingTestJumpHeightPx > 0) {
+                const g = GameConfig.gravity;
+                const h = slime.pendingTestJumpHeightPx;
+                slime.vy = -Math.sqrt(2 * g * h);
+                slime.pendingTestJumpHeightPx = 0; // 只生效一次
+            } else {
+                slime.vy = -Math.abs(GameConfig.ground.baseLaunchVelocity);
+            }
 
             // Lift slightly to avoid re-contact
             slime.y = groundYi - 0.5;

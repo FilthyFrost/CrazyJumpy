@@ -9,14 +9,18 @@ export class ChargingState implements ISlimeState {
         slime.currentCompression = 0;
         slime.reachedPeak = false;
         slime.chargeEfficiency = 1.0;
+        // Reset charge visuals state to avoid carrying over high frame from上一次蓄力
+        slime.chargeProximity = 0;
+        slime.chargeEffectFrame = 1;
+        slime.chargeEffectState = 'idle';
 
         slime.postPeakHoldTime = 0;
         slime.holdLockout = false;
 
         slime.contactHasInput = false;
 
-        // Charge effect animation disabled per user request
-        // slime.startChargeEffect();
+        // Start charge visual effect (maps progress to frames 1-6)
+        slime.startChargeEffect();
 
         // Check input immediately on enter (if player held space while landing)
         // We'll access the scene input or rely on the next update frame? 
@@ -177,8 +181,9 @@ export class ChargingState implements ISlimeState {
                 // Map 0..1 intensity to pixels
                 if (slime.chargeShake01 > 0.01) {
                     // Random jitter for character (high freq)
-                    const spriteAmpX = shakeCfg.charge.ampXMax * 0.35; // 35% of camera shake
-                    const spriteAmpY = shakeCfg.charge.ampYMax * 0.35;
+                    const peakBoost = P > 0.95 ? (1 + (P - 0.95) * 4) : 1; // 0→1 extra when接近满蓄
+                    const spriteAmpX = shakeCfg.charge.ampXMax * 0.35 * peakBoost; // 35% of camera shake
+                    const spriteAmpY = shakeCfg.charge.ampYMax * 0.35 * peakBoost;
 
                     // Use simple random for sprite to decouple from camera
                     // scaling by intensity^2 for sharper dropoff
@@ -586,20 +591,28 @@ export class ChargingState implements ISlimeState {
         slime.launchY = slime.getGroundY();
         slime.predictedApexHeight = predictedApexPx;
         slime.autoBTActivated = false;
+        slime.launchRating = rating; // Store rating for bullet time/monster adjustments
 
-        // Eligibility: PERFECT judgment AND predicted apex > 50 meters
-        slime.autoBTEligible = (rating === 'PERFECT') && (predictedApexMeters > 50);
+        // Eligibility: PERFECT or NORMAL judgment AND predicted apex > 50 meters
+        // NORMAL 也触发子弹时间和怪物生成，但效果减弱
+        slime.autoBTEligible = (rating === 'PERFECT' || rating === 'NORMAL') && (predictedApexMeters > 50);
 
         if (GameConfig.debug && slime.autoBTEligible) {
-            console.log(`[AutoBT] Eligible! Predicted apex: ${Math.round(predictedApexMeters)}m`);
+            console.log(`[AutoBT] Eligible! Rating: ${rating} | Predicted apex: ${Math.round(predictedApexMeters)}m`);
         }
 
-        // ===== 动态导演系统：在 PERFECT 跳跃顶点生成怪物 =====
-        // 确保子弹时间（高光时刻）有怪物可打
+        // ===== 动态导演系统：在 PERFECT/NORMAL 跳跃顶点生成怪物 =====
+        // PERFECT: 100% 怪物数量，100% 材料掉率
+        // NORMAL: 50% 怪物数量，50% 材料掉率（惩罚但不空窗）
         if (slime.autoBTEligible) {
             const scene = slime.scene as any;
             if (scene.monsterManager) {
-                scene.monsterManager.spawnApexMonsters(predictedApexPx, slime.currentLane);
+                const countMultiplier = (rating === 'PERFECT') ? 1.0 : 0.5; // NORMAL = 50% 怪物
+                scene.monsterManager.spawnApexMonsters(predictedApexPx, slime.currentLane, countMultiplier);
+            }
+            // 设置材料掉落倍率 (NORMAL = 50%)
+            if (scene.pickupManager) {
+                scene.pickupManager.materialDropMultiplier = (rating === 'PERFECT') ? 1.0 : 0.5;
             }
         }
 

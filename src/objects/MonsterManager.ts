@@ -61,30 +61,35 @@ export class MonsterManager {
     }
 
     /**
-     * Check collision between player and ANY monster
-     * Returns true if collision occurred (and player should die)
-     * Respetcs "Ghost Mode" (ignore collision if ascending)
+     * 检测玩家与怪物的身体碰撞（空中未砍中）
+     * - 不再杀死玩家，只返回首次撞到的怪物类型
+     * - 具有节流，避免同一只怪多次触发
      */
-    public checkPlayerCollision(playerX: number, playerY: number, playerRadius: number, isAscending: boolean): boolean {
-        // Ghost Mode: Player passes through monsters when ascending
-        if (isAscending) return false;
-
+    public checkDebuffCollision(playerX: number, playerY: number, playerRadius: number, nowMs: number, slime?: any): MonsterType | null {
+        // 使用A01尺寸作为近似碰撞半径
         const monsterRadius = GameConfig.monster.a01.size / 1.2;
         const collisionThresholdSq = (playerRadius + monsterRadius) * (playerRadius + monsterRadius);
 
         for (const monster of this.monsters) {
             if (!monster.isAlive) continue;
+            if (monster.nextDebuffTime > nowMs) continue; // 节流
+            if (monster.noDebuffUntil > nowMs) continue;  // 击杀后保险期
+            if (slime?.recentKilledIds?.has?.(monster.id)) continue; // 刚被击杀过的怪，直接跳过
+            // 挥刀或刚命中的保护窗口内直接跳过，避免先撞到再判击杀
+            if (slime?.hasSwingGrace && slime.hasSwingGrace(nowMs)) continue;
 
             const dx = monster.x - playerX;
             const dy = monster.y - playerY;
             const distSq = dx * dx + dy * dy;
 
             if (distSq < collisionThresholdSq) {
-                return true; // Collision detected
+                // 300ms冷却，避免连续多次叠加
+                monster.nextDebuffTime = nowMs + 300;
+                return monster.type;
             }
         }
 
-        return false;
+        return null;
     }
 
     /**
@@ -94,7 +99,7 @@ export class MonsterManager {
      * @param playerY 玩家Y坐标（攻击命中帧时的位置）
      * @returns 击杀的怪物数量
      */
-    public checkSectorCollision(swipeDirection: -1 | 1, playerX: number, playerY: number): number {
+    public checkSectorCollision(swipeDirection: -1 | 1, playerX: number, playerY: number, slime?: any, nowMs?: number): number {
         let killCount = 0;
 
         // 扇形范围参数
@@ -130,7 +135,21 @@ export class MonsterManager {
                 const deathY = monster.y;
                 const monsterType = monster.type;
                 
+                const ts = nowMs ?? this.scene.time.now;
                 monster.kill();
+                monster.nextDebuffTime = Number.MAX_SAFE_INTEGER; // 被击杀后彻底屏蔽debuff触发
+                monster.noDebuffUntil = ts + 500;
+                // 攻击成功后给玩家短暂无敌+近期命中保护，防止接触立刻上debuff
+                const s = slime ?? (this.scene as any).slime as any;
+                if (s?.addDebuffGrace) {
+                    s.addDebuffGrace(300, ts);
+                }
+                if (s?.addRecentHitGrace) {
+                    s.addRecentHitGrace(200, ts);
+                }
+                if (s?.addRecentKill && monster.id !== undefined) {
+                    s.addRecentKill(monster.id, ts);
+                }
                 killCount++;
 
                 // Spawn drops (根据怪物类型)
@@ -225,8 +244,9 @@ export class MonsterManager {
      * 
      * @param predictedApexHeightPx 预测的顶点高度 (像素)
      * @param playerLane 玩家当前所在的通道 (0=左, 1=中, 2=右)
+     * @param countMultiplier 怪物数量倍率 (默认1.0，NORMAL判定时传0.5)
      */
-    public spawnApexMonsters(predictedApexHeightPx: number, _playerLane: number): void {
+    public spawnApexMonsters(predictedApexHeightPx: number, _playerLane: number, countMultiplier: number = 1.0): void {
         const director = GameConfig.monster.director;
         
         // 检查是否启用动态导演系统
@@ -263,6 +283,9 @@ export class MonsterManager {
             targetCount = Math.floor(baseCount + logFactor * countGrowthFactor);
         }
         targetCount = Phaser.Math.Clamp(targetCount, baseCount, maxCount);
+        
+        // 应用数量倍率 (NORMAL判定时减少怪物数量)
+        targetCount = Math.max(1, Math.round(targetCount * countMultiplier));
 
         // ===== 计算速度倍率 (线性增长) =====
         // speedMult = 1.0 + (height/speedRefHeight) * speedGrowthFactor
@@ -454,6 +477,12 @@ export class MonsterManager {
      *   - 600-1000m: 线性上升 0% → 100%
      *   - 1000m+:    100% (高空主力)
      * 
+     * CloudA (云怪) - 中高空补充：
+     *   - 0-400m:    0%
+     *   - 400-800m: 线性上升 0% → 100%（与其他怪共享权重池，不会硬插满屏）
+     *   - 800-1100m:线性下降 100% → 10%（逐步让位于高空主力）
+     *   - 1100m+:    0%
+     * 
      * @param heightM 怪物生成高度 (米)
      * @returns 选中的怪物类型
      */
@@ -494,6 +523,19 @@ export class MonsterManager {
             a03Weight = 1.0;
         }
 
+        // ===== CloudA 概率计算 (400-1100m) =====
+        let cloudWeight = 0;
+        if (heightM >= 400 && heightM < 800) {
+            // 400-800m: 线性上升 0 → 1
+            const progress = (heightM - 400) / (800 - 400);
+            cloudWeight = progress;
+        } else if (heightM >= 800 && heightM < 1100) {
+            // 800-1100m: 线性下降 1 → 0.1，避免高空抢占 A03
+            const progress = (heightM - 800) / (1100 - 800);
+            cloudWeight = 1.0 - progress * 0.9; // 800m:1.0, 1100m:0.1
+        }
+        // 1100m+: 0
+
         // ===== 收集候选者 =====
         const candidates: { type: MonsterType; weight: number }[] = [];
         
@@ -505,6 +547,9 @@ export class MonsterManager {
         }
         if (a03Weight > 0.01) {
             candidates.push({ type: 'A03', weight: a03Weight });
+        }
+        if (cloudWeight > 0.01) {
+            candidates.push({ type: 'CloudA', weight: cloudWeight });
         }
 
         // 如果没有候选者（边界情况），默认A03（高空应该有A03）
@@ -520,7 +565,7 @@ export class MonsterManager {
         for (const candidate of candidates) {
             random -= candidate.weight;
             if (random <= 0) {
-                console.log(`[Monster] ${heightM.toFixed(0)}m → ${candidate.type} (A01:${(a01Weight*100).toFixed(0)}% A02:${(a02Weight*100).toFixed(0)}% A03:${(a03Weight*100).toFixed(0)}%)`);
+                console.log(`[Monster] ${heightM.toFixed(0)}m → ${candidate.type} (A01:${(a01Weight*100).toFixed(0)}% A02:${(a02Weight*100).toFixed(0)}% A03:${(a03Weight*100).toFixed(0)}% CloudA:${(cloudWeight*100).toFixed(0)}%)`);
                 return candidate.type;
             }
         }

@@ -113,11 +113,12 @@ export class AirborneState implements ISlimeState {
                 const apexHeightM = slime.predictedApexHeight / (GameConfig.display.pixelsPerMeter ?? 50);
 
                 // Access BulletTimeManager via scene and activate (force, no energy cost)
+                // Pass launchRating for NORMAL adjustments (shorter duration, faster timeScale)
                 const scene = slime.scene as any;
                 if (scene.bulletTimeManager && !scene.bulletTimeManager.isActive) {
-                    scene.bulletTimeManager.forceActivateWithHeight(apexHeightM);
+                    scene.bulletTimeManager.forceActivateWithHeight(apexHeightM, slime.launchRating);
                     if (GameConfig.debug) {
-                        console.log(`[AutoBT] Activated at ${Math.round(progress * 100)}% | Height: ${apexHeightM.toFixed(0)}m`);
+                        console.log(`[AutoBT] Activated at ${Math.round(progress * 100)}% | Rating: ${slime.launchRating} | Height: ${apexHeightM.toFixed(0)}m`);
                     }
                 }
             }
