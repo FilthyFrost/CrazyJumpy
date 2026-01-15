@@ -167,8 +167,6 @@ export class Pickup {
         const gravity = 2500; // px/s² (更强的重力，让高空物品加速更快)
         const maxFallSpeed = 6000; // 最大下落速度 (很高，基本不会限制)
         
-        const oldY = this.y;
-        
         // 持续加速下落（模拟真实重力）
         this.fallingVy = Math.min(this.fallingVy + gravity * dt, maxFallSpeed);
         this.y += this.fallingVy * dt;
