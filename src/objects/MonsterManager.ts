@@ -51,24 +51,28 @@ export class MonsterManager {
     /**
      * Update all monsters
      */
-    public update(dt: number): void {
+    public update(dt: number, playerX: number, playerY: number): void {
         const currentTime = this.scene.time.now;
         for (const monster of this.monsters) {
             if (monster.isAlive) {
-                monster.update(dt, currentTime);
+                monster.update(dt, currentTime, playerX, playerY);
             }
         }
     }
 
     /**
      * 检测玩家与怪物的身体碰撞（空中未砍中）
-     * - 不再杀死玩家，只返回首次撞到的怪物类型
+     * - 返回碰撞信息：怪物类型 + 是否是追踪撞击
      * - 具有节流，避免同一只怪多次触发
      */
-    public checkDebuffCollision(playerX: number, playerY: number, playerRadius: number, nowMs: number, slime?: any): MonsterType | null {
-        // 使用A01尺寸作为近似碰撞半径
+    public checkDebuffCollision(playerX: number, playerY: number, playerRadius: number, nowMs: number, slime?: any): { type: MonsterType; isChaseHit: boolean } | null {
+        // 普通碰撞半径（基于怪物尺寸）
         const monsterRadius = GameConfig.monster.a01.size / 1.2;
-        const collisionThresholdSq = (playerRadius + monsterRadius) * (playerRadius + monsterRadius);
+        const normalThresholdSq = (playerRadius + monsterRadius) * (playerRadius + monsterRadius);
+        
+        // A02 追踪撞击：固定 30px 碰撞半径（要非常接近才算撞到）
+        const chaseCollisionRadius = 30;
+        const chaseThresholdSq = chaseCollisionRadius * chaseCollisionRadius;
 
         for (const monster of this.monsters) {
             if (!monster.isAlive) continue;
@@ -81,11 +85,51 @@ export class MonsterManager {
             const dx = monster.x - playerX;
             const dy = monster.y - playerY;
             const distSq = dx * dx + dy * dy;
+            
+            const isChasing = monster.isInChaseMode();
+            // 追踪模式用固定的小碰撞半径
+            const thresholdSq = isChasing ? chaseThresholdSq : normalThresholdSq;
 
-            if (distSq < collisionThresholdSq) {
-                // 300ms冷却，避免连续多次叠加
-                monster.nextDebuffTime = nowMs + 300;
-                return monster.type;
+            if (distSq < thresholdSq) {
+                const isChaseHit = isChasing;
+                
+                if (isChaseHit) {
+                    // 追踪撞击：明显的撞击效果
+                    
+                    // 立即标记为死亡
+                    monster.isAlive = false;
+                    
+                    // 撞击动画：闪白 + 放大 + 抖动 + 消失
+                    monster.sprite.setTint(0xffffff);
+                    const originalX = monster.sprite.x;
+                    
+                    // 抖动效果
+                    this.scene.tweens.add({
+                        targets: monster.sprite,
+                        x: originalX + 10,
+                        duration: 30,
+                        yoyo: true,
+                        repeat: 3,
+                    });
+                    
+                    // 放大消失效果
+                    this.scene.tweens.add({
+                        targets: monster.sprite,
+                        scaleX: monster.sprite.scaleX * 2,
+                        scaleY: monster.sprite.scaleY * 2,
+                        alpha: 0,
+                        duration: 250,
+                        ease: 'Quad.easeOut',
+                        onComplete: () => {
+                            monster.destroy();
+                        }
+                    });
+                } else {
+                    // 普通碰撞：300ms冷却
+                    monster.nextDebuffTime = nowMs + 300;
+                }
+                
+                return { type: monster.type, isChaseHit };
             }
         }
 
@@ -247,10 +291,16 @@ export class MonsterManager {
      * @param countMultiplier 怪物数量倍率 (默认1.0，NORMAL判定时传0.5)
      */
     public spawnApexMonsters(predictedApexHeightPx: number, _playerLane: number, countMultiplier: number = 1.0): void {
+        const apexM = predictedApexHeightPx / this.pixelsPerMeter;
+        console.log(`[MonsterManager] ★ spawnApexMonsters 被调用! 高度=${apexM.toFixed(0)}m, 倍率=${countMultiplier}`);
+        
         const director = GameConfig.monster.director;
         
         // 检查是否启用动态导演系统
-        if (!director?.enabled) return;
+        if (!director?.enabled) {
+            console.log(`[MonsterManager] 动态导演系统已禁用`);
+            return;
+        }
 
         // 计算生成区域 (米)
         const apexHeightM = predictedApexHeightPx / this.pixelsPerMeter;

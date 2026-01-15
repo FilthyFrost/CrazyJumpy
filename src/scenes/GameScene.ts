@@ -612,7 +612,7 @@ export default class GameScene extends Phaser.Scene {
         this.backpackUI = new BackpackUI(this, this.inventoryManager);
         this.backpackUI.onOpen(() => this.pauseForBackpack());
         this.backpackUI.onClose(() => this.resumeFromBackpack());
-        this.input.keyboard?.on('keydown-B', () => this.toggleBackpack());
+        // B 键在 update 中通过 JustDown 处理，不在这里重复监听
 
         // ===== START SCREEN OVERLAY =====
         this.createStartScreen(width, height);
@@ -1142,7 +1142,7 @@ export default class GameScene extends Phaser.Scene {
             this.ground.render(simDt, this.slime.getCompression(), this.slime.x);
 
             // Update monsters
-            this.monsterManager.update(simDt);
+            this.monsterManager.update(simDt, this.slime.x, this.slime.y);
 
             // Update pickups (chase player with dynamic speed)
             const playerSpeed = Math.abs(this.slime.vy);
@@ -1154,15 +1154,17 @@ export default class GameScene extends Phaser.Scene {
                 && !this.slime.hasRecentHitGrace(this.time.now)
                 && !this.slime.hasRecentHitWindow(this.time.now)
                 && !this.slime.hasSwingGrace(this.time.now)) { // 挥刀窗口内直接跳过，确保先判击杀
-                const hitType = this.monsterManager.checkDebuffCollision(
+                const hitResult = this.monsterManager.checkDebuffCollision(
                     this.slime.x,
                     this.slime.y,
                     this.slime.radius,
                     this.time.now,
                     this.slime
                 );
-                if (hitType) {
-                    this.slime.applyDebuffFromMonster(hitType);
+                if (hitResult) {
+                    // A02 追踪撞击给予 2秒中毒II，普通碰撞给予 1秒
+                    const duration = hitResult.isChaseHit ? 2 : 1;
+                    this.slime.applyDebuffFromMonster(hitResult.type, duration);
                 }
             }
 

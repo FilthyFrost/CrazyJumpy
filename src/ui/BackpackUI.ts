@@ -217,6 +217,15 @@ export class BackpackUI {
                     if (icon) {
                         icon.setDisplaySize(cellW * 0.6, cellH * 0.6);
                     }
+                    
+                    // 更新锁定遮罩大小
+                    const lockOverlay = slot.getByName('lockOverlay') as Phaser.GameObjects.Graphics;
+                    if (lockOverlay && !this.inventory.isSlotUnlocked(idx)) {
+                        lockOverlay.clear();
+                        lockOverlay.fillStyle(0x000000, 0.6);
+                        lockOverlay.fillRoundedRect(-cellW/2 + 4, -cellH/2 + 4, cellW - 8, cellH - 8, 4);
+                    }
+                    
                     idx++;
                 }
             }
@@ -246,6 +255,8 @@ export class BackpackUI {
 
     private createGrid() {
         for (let i = 0; i < this.cols * this.rows; i++) {
+            const isLocked = !this.inventory.isSlotUnlocked(i);
+            
             const icon = this.scene.add.image(0, 0, 'pickup_coin');
             icon.setVisible(false);
             icon.setName('icon');
@@ -258,8 +269,19 @@ export class BackpackUI {
                 stroke: '#000000',
                 strokeThickness: 3,
             }).setOrigin(0.5, 0.5).setName('count');
+            
+            // 锁定遮罩（灰色半透明）
+            const lockOverlay = this.scene.add.graphics();
+            lockOverlay.setName('lockOverlay');
+            lockOverlay.setVisible(isLocked);
+            
+            // 锁定图标
+            const lockIcon = this.scene.add.text(0, 0, '🔒', {
+                fontSize: '28px',
+            }).setOrigin(0.5, 0.5).setName('lockIcon');
+            lockIcon.setVisible(isLocked);
 
-            const slotContainer = this.scene.add.container(0, 0, [icon, count]);
+            const slotContainer = this.scene.add.container(0, 0, [icon, count, lockOverlay, lockIcon]);
             this.container.add(slotContainer);
             this.slots.push(slotContainer);
         }

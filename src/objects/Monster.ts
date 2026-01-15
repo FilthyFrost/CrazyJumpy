@@ -48,6 +48,10 @@ export class Monster {
     private speedMultiplier: number = 1.0; // 速度倍率 (高度越高越快)
     private nextDirectionChange: number = 0;
 
+    // A02 追踪行为
+    private isChasing: boolean = false;  // 是否正在追踪玩家
+    private chaseCurrentSpeed: number = 0;  // 当前追踪速度（会加速）
+
     constructor(scene: Phaser.Scene, config: MonsterConfig, screenWidth: number) {
         this.scene = scene;
         this.id = Monster.NEXT_ID++;
@@ -86,12 +90,17 @@ export class Monster {
 
         // 播放初始动画
         this.playDirectionAnimation();
+        
+        // 调试：A02 创建时打印日志
+        if (this.type === 'A02') {
+            console.log(`[A02] 创建蝙蝠! Y=${this.y.toFixed(0)}, 高度=${this.heightMeters}m`);
+        }
     }
 
     /**
      * 获取怪物类型配置
      */
-    private getTypeConfig(): { size: number; frameRate: number } {
+    public getTypeConfig(): { size: number; frameRate: number } {
         switch (this.type) {
             case 'A02':
                 return {
@@ -133,26 +142,92 @@ export class Monster {
     /**
      * 更新怪物状态
      */
-    public update(dt: number, currentTime: number): void {
+    public update(dt: number, currentTime: number, playerX?: number, playerY?: number): void {
         if (!this.isAlive) return;
 
-        // 检查是否需要改变方向
+        // ===== A02 蝙蝠：漏怪追踪机制 =====
+        // 玩家飞过后，A02 立刻开始追踪，速度和掉落物一样
+        if (this.type === 'A02' && playerX !== undefined && playerY !== undefined) {
+            // 检测玩家是否飞过了这个怪物（玩家 Y < 怪物 Y 表示玩家在上方）
+            const playerAbove = playerY < this.y - 30;  // 玩家在怪物上方 30px 以上
+            
+            if (playerAbove && !this.isChasing) {
+                // 玩家刚刚飞过！立刻开始追踪（无读条）
+                this.isChasing = true;
+                this.chaseCurrentSpeed = 0;  // 从 0 开始加速
+            }
+            
+            if (this.isChasing) {
+                // ===== 追踪模式：和掉落物一样的追踪逻辑 =====
+                this.sprite.setTint(0xff0000);  // 红色
+                
+                // 计算到玩家的方向和距离
+                const dx = playerX - this.x;
+                const dy = playerY - this.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                
+                if (dist > 5) {
+                    // 追踪速度：和掉落物一样（基础1000 + 加速）
+                    const baseSpeed = 1000;
+                    const chaseAccel = 12000;  // 和掉落物一样的加速度
+                    const maxSpeed = 3000;     // 最大速度
+                    
+                    // 加速
+                    this.chaseCurrentSpeed = Math.min(
+                        this.chaseCurrentSpeed + chaseAccel * dt,
+                        maxSpeed
+                    );
+                    
+                    // 至少要有基础速度
+                    const speed = Math.max(baseSpeed, this.chaseCurrentSpeed);
+                    
+                    // 归一化方向并移动
+                    const nx = dx / dist;
+                    const ny = dy / dist;
+                    this.x += nx * speed * dt;
+                    this.y += ny * speed * dt;
+                }
+            } else {
+                // 还没被飞过：正常巡逻（只水平移动）
+                if (currentTime >= this.nextDirectionChange) {
+                    this.changeDirection();
+                }
+                const moveAmount = this.moveDirection * this.moveSpeed * dt;
+                this.x += moveAmount;
+
+                // 通道边界限制
+                const laneCount = GameConfig.lane.count ?? 3;
+                const laneWidth = this.screenWidth / laneCount;
+                const laneLeftBound = this.currentLane * laneWidth + laneWidth * 0.25;
+                const laneRightBound = (this.currentLane + 1) * laneWidth - laneWidth * 0.25;
+
+                if (this.x < laneLeftBound) {
+                    this.x = laneLeftBound;
+                    this.changeDirection();
+                } else if (this.x > laneRightBound) {
+                    this.x = laneRightBound;
+                    this.changeDirection();
+                }
+            }
+
+            this.sprite.setPosition(this.x, this.y);
+            return;
+        }
+
+        // ===== 其他怪物维持原逻辑 =====
         if (currentTime >= this.nextDirectionChange) {
             this.changeDirection();
         }
 
-        // 移动
         const moveAmount = this.moveDirection * this.moveSpeed * dt;
         this.x += moveAmount;
 
-        // ===== 边界检查 - 怪物只能在自己通道内活动 =====
         const laneCount = GameConfig.lane.count ?? 3;
         const laneWidth = this.screenWidth / laneCount;
-        
-        // 计算当前通道的边界 - 25%边距确保怪物始终在攻击范围内
+
         const laneLeftBound = this.currentLane * laneWidth + laneWidth * 0.25;
         const laneRightBound = (this.currentLane + 1) * laneWidth - laneWidth * 0.25;
-        
+
         if (this.x < laneLeftBound) {
             this.x = laneLeftBound;
             this.changeDirection();
@@ -161,7 +236,6 @@ export class Monster {
             this.changeDirection();
         }
 
-        // 更新精灵位置
         this.sprite.setPosition(this.x, this.y);
     }
 
@@ -202,6 +276,13 @@ export class Monster {
         const variance = GameConfig.monster.directionChangeVariance;
         const delay = interval + Phaser.Math.Between(-variance, variance);
         this.nextDirectionChange = this.scene.time.now + Math.max(500, delay);
+    }
+
+    /**
+     * 检查 A02 是否正在追踪玩家
+     */
+    public isInChaseMode(): boolean {
+        return this.type === 'A02' && this.isChasing;
     }
 
     /**

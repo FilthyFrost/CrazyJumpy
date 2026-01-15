@@ -252,8 +252,13 @@ export const GameConfig = {
             maxHeightM: 600,          // 最大出现高度 (米)
             baseWeight: 0.5,          // 基础权重 (50%概率)
             // 高度权重曲线：越接近600m权重越高
-            // 公式: weight = baseWeight × (1 + heightBonus × (height - minHeight) / (maxHeight - minHeight))
             heightBonus: 1.5,         // 高度加成 (600m时权重 = 0.5 × 2.5 = 1.25)
+            
+            // ===== 漏怪追踪配置 =====
+            // 玩家飞过 A02 后，A02 会直线高速追踪玩家
+            chaseSpeedPxPerSec: 2200, // 追踪速度（像素/秒）- 非常快！
+            chaseTelegraphMs: 150,    // 追踪前的读条时间（毫秒）
+            // 撞到玩家后给予 中毒II 2秒（在 MonsterManager 里处理）
         },
         
         // ----- A03 怪物 (骷髅/高空精英) -----

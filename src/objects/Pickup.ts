@@ -34,11 +34,12 @@ export class Pickup {
     public y: number;
 
     // State machine
-    private state: 'ejecting' | 'chasing' | 'grounded' = 'ejecting';
+    private state: 'ejecting' | 'chasing' | 'grounded' | 'falling' = 'ejecting';
     private stateTimer: number = 0;
     private attractEnabled: boolean = true;  // 是否允许追踪玩家
     private collectEnabled: boolean = true;  // 是否允许被拾取
     private stayOnGround: boolean = false;   // grounded 时是否静止不漂浮
+    private fallingVy: number = 0;           // 下落速度（背包满时使用）
 
     // Ejection parameters (弹出期)
     private ejectDuration: number = 0.4;   // 弹出持续时间
@@ -92,7 +93,6 @@ export class Pickup {
             this.ejectDuration = 5.0; // 死亡喷射需要更长时间让物品落地
             // 死亡喷射物品需要更高的深度，以便在游戏结束界面上方显示
             this.sprite.setDepth(1999);
-            console.log('[Pickup] Death eject created at', this.x.toFixed(0), this.y.toFixed(0), 'vx:', this.ejectVx.toFixed(0), 'vy:', this.ejectVy.toFixed(0));
         } else {
             // 普通弹出：随机方向弹出，模拟物品从怪物身上飞出的效果
             const ejectAngle = Math.random() * Math.PI * 2;
@@ -140,11 +140,6 @@ export class Pickup {
 
         this.stateTimer += dt;
 
-        // 死亡喷射模式调试
-        if (this.useDeathEject && this.stateTimer < 0.1) {
-            console.log('[Pickup] Death eject update: state=', this.state, 'x:', this.x.toFixed(0), 'y:', this.y.toFixed(0), 'vy:', this.ejectVy.toFixed(0));
-        }
-
         // State machine
         switch (this.state) {
             case 'ejecting':
@@ -156,7 +151,46 @@ export class Pickup {
             case 'grounded':
                 // 简单的轻微漂浮效果，可后续优化
                 return this.updateGrounded(dt);
+            
+            case 'falling':
+                // 背包满时自然下落
+                return this.updateFalling(dt);
         }
+    }
+    
+    /**
+     * 下落状态：背包满时，物品自然下落到地面（类似地球重力）
+     * 物品会持续加速直到落地，高空物品会越落越快
+     */
+    private updateFalling(dt: number): boolean {
+        // 真实重力加速度效果
+        const gravity = 2500; // px/s² (更强的重力，让高空物品加速更快)
+        const maxFallSpeed = 6000; // 最大下落速度 (很高，基本不会限制)
+        
+        const oldY = this.y;
+        
+        // 持续加速下落（模拟真实重力）
+        this.fallingVy = Math.min(this.fallingVy + gravity * dt, maxFallSpeed);
+        this.y += this.fallingVy * dt;
+        
+        // 更新精灵位置
+        this.sprite.x = this.x;
+        this.sprite.y = this.y;
+        
+        // 目标：落到世界坐标的初始地面
+        const scene = this.scene as any;
+        const worldGroundY = scene.groundY ?? 768;
+        const targetGroundY = worldGroundY - 20;
+        
+        // 检查是否落地
+        if (this.y >= targetGroundY) {
+            this.y = targetGroundY;
+            this.sprite.y = this.y;
+            this.state = 'grounded';
+            this.fallingVy = 0;
+        }
+        
+        return false;
     }
 
     /**
@@ -189,19 +223,19 @@ export class Pickup {
             // 旋转效果
             this.sprite.angle += this.ejectVx * 0.5 * dt;
 
-            // 落地检测
-            if (this.y >= this.groundY) {
-                this.y = this.groundY;
+            // 落地检测 - 和背包满时物品保持一致，落到地面上方 20px
+            const targetGroundY = this.groundY - 20;
+            if (this.y >= targetGroundY) {
+                this.y = targetGroundY;
                 this.sprite.y = this.y;
                 this.sprite.angle = 0;
                 this.sprite.clearTint();
                 
-                // 进入 grounded 状态，静止不动
+                // 进入 grounded 状态，启用漂浮动画
                 this.state = 'grounded';
                 this.stateTimer = 0;
                 this.attractEnabled = false;
                 this.collectEnabled = false;
-                console.log('[Pickup] Death eject landed at', this.x.toFixed(0), this.y.toFixed(0));
             }
             return false;
         }
@@ -255,8 +289,9 @@ export class Pickup {
      */
     private updateChasing(dt: number, playerX: number, playerY: number, playerSpeed: number): boolean {
         if (!this.attractEnabled) {
-            // 如果禁止吸附，则转入 grounded 状态
-            this.state = 'grounded';
+            // 如果禁止吸附（背包满），则转入下落状态
+            this.state = 'falling';
+            this.fallingVy = 0;
             return false;
         }
         // Calculate direction to player
@@ -341,14 +376,19 @@ export class Pickup {
         });
     }
 
-    /** 禁用吸附/拾取，物品停留地面 */
+    /** 禁用吸附/拾取，如果在空中则自然下落到地面 */
     public disableAttract(): void {
         // 死亡喷射模式的物品不应该被改变状态
         if (this.useDeathEject && this.state === 'ejecting') return;
         
         this.attractEnabled = false;
         this.collectEnabled = false;
-        this.state = 'grounded';
+        
+        // 如果正在追踪中或弹出中（在空中），切换到下落状态
+        if (this.state === 'chasing' || this.state === 'ejecting') {
+            this.state = 'falling';
+            this.fallingVy = 0; // 从 0 开始加速下落
+        }
     }
 
     /** 重新允许吸附/拾取（如需要） */

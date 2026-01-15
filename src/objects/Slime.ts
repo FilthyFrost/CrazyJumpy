@@ -877,21 +877,27 @@ export default class Slime {
 
     /**
      * 空中撞怪的DEBUFF入口
-     * A01: 中毒I (+1s, tick 1hp/s, 上限5s)
-     * A02: 中毒II (+1s, tick 2hp/s, 上限5s)
+     * A01: 中毒I (+duration秒, tick 1hp/s, 上限5s)
+     * A02: 中毒II (+duration秒, tick 2hp/s, 上限5s)
+     *      - 普通碰撞: 1秒
+     *      - 追踪撞击: 2秒
      * CloudA: 上升速度减缓（一次性压缩当前上升速度）
+     * 
+     * @param monsterType 怪物类型
+     * @param duration 中毒持续时间（秒），默认1秒
      */
-    public applyDebuffFromMonster(monsterType: MonsterType): void {
+    public applyDebuffFromMonster(monsterType: MonsterType, duration: number = 1): void {
         // 如果刚击杀过怪物窗口内，直接忽略debuff（砍到必然接触）
         const nowMs = this.scene.time.now;
         if (this.hasRecentHitWindow(nowMs)) return;
 
         switch (monsterType) {
             case 'A01':
-                this.poison1Duration = Math.min(5, this.poison1Duration + 1);
+                this.poison1Duration = Math.min(5, this.poison1Duration + duration);
                 break;
             case 'A02':
-                this.poison2Duration = Math.min(5, this.poison2Duration + 1);
+                this.poison2Duration = Math.min(5, this.poison2Duration + duration);
+                console.log(`[Slime] 中毒II +${duration}秒, 总计${this.poison2Duration.toFixed(1)}秒`);
                 break;
             case 'CloudA': {
                 // 改为“沿当前运动方向减速”，不再模拟按下SPACE

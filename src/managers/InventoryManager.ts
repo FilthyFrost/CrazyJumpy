@@ -17,12 +17,20 @@ export class InventoryManager {
     public readonly columns = 4;
     public readonly rows = 4;
     public readonly stackSize = 10;
+    
+    // 测试模式：只开放前 2 个格子
+    public readonly unlockedSlots = 2;
 
     private slots: InventorySlot[];
     private pickupManager: PickupManager | null = null;
 
     constructor() {
         this.slots = Array.from({ length: this.columns * this.rows }, () => ({ type: null, count: 0 }));
+    }
+    
+    /** 检查某个格子是否已解锁 */
+    public isSlotUnlocked(index: number): boolean {
+        return index < this.unlockedSlots;
     }
 
     public setPickupManager(manager: PickupManager) {
@@ -35,32 +43,42 @@ export class InventoryManager {
 
     /**
      * 检查是否能完整放入 amount 个指定物品
+     * 只检查已解锁的格子
      */
     public canAdd(type: PickupType, amount: number): boolean {
         let need = amount;
-        // 先看已有同类堆叠的剩余空间
-        for (const slot of this.slots) {
+        // 先看已有同类堆叠的剩余空间（只看已解锁格子）
+        for (let i = 0; i < this.unlockedSlots; i++) {
+            const slot = this.slots[i];
             if (slot.type === type && slot.count < this.stackSize) {
                 const space = this.stackSize - slot.count;
                 need -= space;
                 if (need <= 0) return true;
             }
         }
-        // 再看空格子数量
-        const emptySlots = this.slots.filter(s => !s.type || s.count === 0).length;
-        const capacity = emptySlots * this.stackSize;
+        // 再看空格子数量（只看已解锁格子）
+        let emptyCount = 0;
+        for (let i = 0; i < this.unlockedSlots; i++) {
+            const slot = this.slots[i];
+            if (!slot.type || slot.count === 0) {
+                emptyCount++;
+            }
+        }
+        const capacity = emptyCount * this.stackSize;
         return need <= capacity;
     }
 
     /**
      * 尝试放入，返回已放入数量及剩余未放入数量
+     * 只使用已解锁的格子
      */
     public add(type: PickupType, amount: number): { added: number; left: number } {
         console.log('[InventoryManager] add:', type, amount);
         let left = amount;
-        // 先填充已有堆叠
-        for (const slot of this.slots) {
+        // 先填充已有堆叠（只看已解锁格子）
+        for (let i = 0; i < this.unlockedSlots; i++) {
             if (left <= 0) break;
+            const slot = this.slots[i];
             if (slot.type === type && slot.count < this.stackSize) {
                 const space = this.stackSize - slot.count;
                 const take = Math.min(space, left);
@@ -68,9 +86,10 @@ export class InventoryManager {
                 left -= take;
             }
         }
-        // 再占用空格
-        for (const slot of this.slots) {
+        // 再占用空格（只看已解锁格子）
+        for (let i = 0; i < this.unlockedSlots; i++) {
             if (left <= 0) break;
+            const slot = this.slots[i];
             if (!slot.type || slot.count === 0) {
                 const take = Math.min(this.stackSize, left);
                 slot.type = type;
@@ -175,7 +194,7 @@ export class InventoryManager {
                 // 直接调用 spawn，不用 delayedCall
                 pm.spawn(itemType, spawnX, safeSpawnY, {
                     disableAttract: true,
-                    stayOnGround: true,
+                    stayOnGround: false,  // 落地后启用漂浮动画
                     ejectVxOverride: vx,
                     ejectVyOverride: vy,
                     groundY: finalGroundY,

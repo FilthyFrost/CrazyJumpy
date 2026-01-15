@@ -43,11 +43,6 @@ export class PickupManager {
         ejectVyOverride?: number;
         groundY?: number;
     }): void {
-        // 调试日志
-        if (opts?.ejectVxOverride !== undefined) {
-            console.log('[PickupManager] spawn death eject:', type, 'at', x.toFixed(0), y.toFixed(0), 'vx:', opts.ejectVxOverride?.toFixed(0), 'vy:', opts.ejectVyOverride?.toFixed(0), 'groundY:', opts.groundY?.toFixed(0));
-        }
-        
         const pickup = new Pickup(this.scene, { 
             type, x, y, 
             noAttractDelay: opts?.noAttractDelay, 
